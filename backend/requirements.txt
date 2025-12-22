@@ -8,11 +8,11 @@ Flask-JWT-Extended==4.6.0
 # 資料庫
 SQLAlchemy==2.0.23
 Flask-SQLAlchemy==3.1.1
-PyMySQL==1.1.0
+PyMySQL==1.1.1
 
 # 地圖服務
 googlemaps==4.10.0
-requests==2.31.0
+requests==2.32.4
 
 # 報表產生
 openpyxl==3.1.2
@@ -33,7 +33,7 @@ pytz==2023.3
 loguru==0.7.2
 
 # 驗證
-Werkzeug==3.0.1
+Werkzeug==3.1.4
 
 # 瀏覽器自動化（用於 Google Maps 截圖）
 playwright>=1.40.0
