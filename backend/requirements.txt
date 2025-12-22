@@ -12,7 +12,7 @@ PyMySQL==1.1.0
 
 # 地圖服務
 googlemaps==4.10.0
-requests==2.31.0
+requests==2.32.4
 
 # 報表產生
 openpyxl==3.1.2
