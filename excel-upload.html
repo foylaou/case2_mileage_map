@@ -1,0 +1,755 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Excel 里程計算系統</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        .project-block {
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+            background-color: #f8f9fa;
+        }
+        .project-header {
+            font-weight: bold;
+            font-size: 1.2em;
+            margin-bottom: 15px;
+            color: #0d6efd;
+        }
+        .record-row {
+            padding: 10px;
+            margin-bottom: 8px;
+            background-color: white;
+            border-radius: 4px;
+            border-left: 3px solid #dee2e6;
+        }
+        .record-row.selected {
+            border-left-color: #0d6efd;
+            background-color: #e7f1ff;
+        }
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+        }
+        .loading-content {
+            background-color: white;
+            padding: 30px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .map-thumbnail {
+            max-width: 200px;
+            max-height: 150px;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <!-- 導航列 -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="#">
+                <i class="bi bi-file-earmark-excel me-2"></i>
+                Excel 里程計算系統
+            </a>
+        </div>
+    </nav>
+
+    <!-- 主要內容區域 -->
+    <div class="container-fluid mt-4">
+        <!-- 步驟一：上傳 Excel -->
+        <div class="card mb-4" id="uploadSection">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0"><i class="bi bi-upload"></i> 步驟一：上傳 Excel 檔案</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label for="excelFile" class="form-label">選擇 Excel 檔案</label>
+                            <input type="file" class="form-control" id="excelFile" accept=".xlsx,.xls">
+                            <small class="form-text text-muted">支援格式：.xlsx, .xls</small>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label for="fixedOrigin" class="form-label">固定起點地址（可選）</label>
+                            <input type="text" class="form-control" id="fixedOrigin" placeholder="例如：高雄市前鎮區復興四路12號">
+                            <small class="form-text text-muted">如果所有行程都從同一起點出發，可在此設定</small>
+                        </div>
+                    </div>
+                </div>
+                <button class="btn btn-primary" onclick="uploadExcel()">
+                    <i class="bi bi-upload"></i> 上傳並解析
+                </button>
+            </div>
+        </div>
+
+        <!-- 步驟二：資料預覽與選擇 -->
+        <div class="card mb-4" id="previewSection" style="display: none;">
+            <div class="card-header bg-success text-white">
+                <h5 class="mb-0"><i class="bi bi-eye"></i> 步驟二：資料預覽與選擇</h5>
+            </div>
+            <div class="card-body">
+                <div id="projectsContainer"></div>
+                <div class="mt-3 d-flex gap-2">
+                    <button class="btn btn-outline-primary" onclick="selectAllRecords()">
+                        <i class="bi bi-check-square"></i> 全選
+                    </button>
+                    <button class="btn btn-outline-secondary" onclick="deselectAllRecords()">
+                        <i class="bi bi-square"></i> 取消全選
+                    </button>
+                    <button class="btn btn-success" onclick="calculateAll()">
+                        <i class="bi bi-calculator"></i> 開始計算（僅計算勾選的項目）
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 步驟三：計算結果 -->
+        <div class="card mb-4" id="resultSection" style="display: none;">
+            <div class="card-header bg-info text-white">
+                <h5 class="mb-0"><i class="bi bi-check-circle"></i> 步驟三：計算結果</h5>
+            </div>
+            <div class="card-body">
+                <div id="resultsContainer"></div>
+                <div class="mt-3">
+                    <button class="btn btn-success me-2" onclick="exportExcel()">
+                        <i class="bi bi-file-earmark-excel"></i> 下載更新後 Excel
+                    </button>
+                    <button class="btn btn-primary me-2" onclick="exportWordSingle()">
+                        <i class="bi bi-file-earmark-word"></i> 下載 Word（單一計畫別）
+                    </button>
+                    <button class="btn btn-warning" onclick="exportWordAll()">
+                        <i class="bi bi-file-earmark-zip"></i> 下載 Word（所有計畫別 ZIP）
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading 遮罩 -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-content">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">載入中...</span>
+            </div>
+            <p class="mt-3" id="loadingText">處理中...</p>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // API 基礎設定 - 使用相對路徑，適用於打包後的 exe 版本
+        const API_BASE_URL = window.location.origin + '/api';
+        let currentData = null;
+        let currentFilepath = null;
+        let fixedOrigin = '';
+
+        // 取得 JWT Token（簡化版，實際應從登入系統取得）
+        function getToken() {
+            return localStorage.getItem('jwt_token') || '';
+        }
+
+        // API 請求函式
+        async function apiRequest(endpoint, method = 'GET', data = null, isFormData = false) {
+            const url = `${API_BASE_URL}${endpoint}`;
+            const options = {
+                method: method,
+                headers: {}
+            };
+
+            if (!isFormData) {
+                options.headers['Content-Type'] = 'application/json';
+            }
+
+            const token = getToken();
+            if (token) {
+                options.headers['Authorization'] = `Bearer ${token}`;
+            }
+
+            if (data) {
+                if (isFormData) {
+                    options.body = data;
+                } else {
+                    options.body = JSON.stringify(data);
+                }
+            }
+
+            try {
+                const response = await fetch(url, options);
+                
+                // 檢查 HTTP 狀態
+                if (!response.ok) {
+                    let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+                    try {
+                        const errorData = await response.json();
+                        errorMessage = errorData.message || errorMessage;
+                    } catch (e) {
+                        // 如果無法解析 JSON，使用預設錯誤訊息
+                    }
+                    return { status: 'error', message: errorMessage };
+                }
+                
+                const result = await response.json();
+                return result;
+            } catch (error) {
+                console.error('API 請求錯誤:', error);
+                let errorMsg = error.message;
+                if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+                    errorMsg = '無法連接到後端服務，請確認後端服務是否已啟動';
+                }
+                return { status: 'error', message: errorMsg };
+            }
+        }
+
+        // 顯示/隱藏 Loading
+        function showLoading(text = '處理中...') {
+            document.getElementById('loadingText').textContent = text;
+            document.getElementById('loadingOverlay').style.display = 'flex';
+        }
+
+        function hideLoading() {
+            document.getElementById('loadingOverlay').style.display = 'none';
+        }
+
+        // 上傳 Excel
+        async function uploadExcel() {
+            const fileInput = document.getElementById('excelFile');
+            const file = fileInput.files[0];
+            fixedOrigin = document.getElementById('fixedOrigin').value.trim();
+
+            if (!file) {
+                alert('請選擇 Excel 檔案');
+                return;
+            }
+
+            showLoading('上傳並解析 Excel 檔案...');
+
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+                if (fixedOrigin) {
+                    formData.append('fixed_origin', fixedOrigin);
+                }
+
+                // 建立 headers（不包含 Content-Type，讓瀏覽器自動設定）
+                const headers = {};
+                const token = getToken();
+                if (token) {
+                    headers['Authorization'] = `Bearer ${token}`;
+                }
+
+                // 建立 AbortController 用於超時控制
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 秒超時
+
+                let response;
+                try {
+                    response = await fetch(`${API_BASE_URL}/upload/excel`, {
+                        method: 'POST',
+                        headers: headers,
+                        body: formData,
+                        signal: controller.signal
+                    });
+                    clearTimeout(timeoutId);
+                } catch (fetchError) {
+                    clearTimeout(timeoutId);
+                    if (fetchError.name === 'AbortError') {
+                        throw new Error('請求超時（超過 60 秒），請檢查：\n1. Excel 檔案是否過大\n2. 後端服務是否正常運行\n3. 網路連線是否正常');
+                    }
+                    throw fetchError;
+                }
+
+                // 檢查 HTTP 狀態
+                if (!response.ok) {
+                    let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+                    try {
+                        const errorData = await response.json();
+                        errorMessage = errorData.message || errorMessage;
+                    } catch (e) {
+                        // 如果無法解析 JSON，使用預設錯誤訊息
+                    }
+                    throw new Error(errorMessage);
+                }
+
+                const result = await response.json();
+
+                if (result.status === 'success') {
+                    currentData = result.data;
+                    currentFilepath = result.data.file_path;
+                    displayPreview(result.data);
+                    document.getElementById('previewSection').style.display = 'block';
+                } else {
+                    alert('上傳失敗: ' + (result.message || '未知錯誤'));
+                }
+            } catch (error) {
+                console.error('上傳錯誤詳情:', error);
+                let errorMsg = '上傳錯誤: ' + error.message;
+                
+                // 提供更詳細的錯誤訊息
+                if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+                    errorMsg = '無法連接到後端服務，請確認：\n1. 後端服務是否已啟動（http://localhost:5001）\n2. 網路連線是否正常\n3. 瀏覽器控制台是否有更多錯誤訊息';
+                }
+                
+                alert(errorMsg);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        // 顯示預覽
+        function displayPreview(data) {
+            const container = document.getElementById('projectsContainer');
+            container.innerHTML = '';
+
+            for (const [projectName, projectData] of Object.entries(data.projects)) {
+                const projectBlock = document.createElement('div');
+                projectBlock.className = 'project-block';
+                projectBlock.innerHTML = `
+                    <div class="project-header">
+                        <i class="bi bi-folder"></i> ${projectName} (${projectData.count} 筆)
+                    </div>
+                    <div class="project-records" id="project-${projectName}"></div>
+                `;
+
+                const recordsContainer = projectBlock.querySelector(`#project-${projectName}`);
+                projectData.records.forEach((record, idx) => {
+                    const recordRow = document.createElement('div');
+                    recordRow.className = 'record-row';
+                    recordRow.id = `record-${projectName}-${idx}`;
+                    
+                    const travelDate = record['出差日期時間（開始）'] || '';
+                    const origin = record['起點名稱'] || '';
+                    const destination = record['目的地名稱'] || '';
+                    const isDriving = record['IsDriving'] || 'N';
+                    const oneWayKm = record['OneWayKm'];
+                    const roundTripKm = record['RoundTripKm'];
+                    const mapImage = record['StaticMapImage'];
+                    const mapUrl = record['GoogleMapUrl'];
+                    const stepCount = record['StepCount'];
+                    const routeSteps = record['RouteSteps'];
+                    
+                    // 建立顯示內容
+                    let resultHtml = '';
+                    if (oneWayKm !== undefined && oneWayKm !== null && oneWayKm > 0) {
+                        resultHtml = `
+                            <div class="mt-2 p-2 bg-light rounded">
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <strong>距離資訊：</strong><br>
+                                        單程：<span class="text-primary">${oneWayKm} 公里</span><br>
+                                        往返：<span class="text-success">${roundTripKm} 公里</span><br>
+                                        ${stepCount ? `導航步驟：<span class="text-info">${stepCount} 步</span><br>` : ''}
+                                        ${mapUrl ? `<a href="${mapUrl}" target="_blank" class="btn btn-sm btn-link p-0 mt-1">查看地圖 <i class="bi bi-box-arrow-up-right"></i></a>` : ''}
+                                        ${routeSteps ? `<br><a href="#" class="btn btn-sm btn-link p-0" onclick="showRouteSteps('${projectName}', ${idx}); return false;">查看導航步驟 <i class="bi bi-list-ul"></i></a>` : ''}
+                                    </div>
+                                    <div class="col-md-6">
+                                        ${mapImage ? `
+                                            <strong>地圖預覽：</strong><br>
+                                            <img src="http://localhost:5001/temp/maps/${mapImage.split('/').pop()}" 
+                                                 class="map-thumbnail mt-1" 
+                                                 alt="路線地圖"
+                                                 onerror="this.style.display='none'; this.parentElement.innerHTML='<small class=\"text-muted\">地圖載入失敗</small>'">
+                                        ` : ''}
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    }
+                    
+                    recordRow.innerHTML = `
+                        <div class="d-flex align-items-center gap-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" 
+                                       id="select-${projectName}-${idx}" 
+                                       checked
+                                       onchange="updateSelectStatus('${projectName}', ${idx}, this.checked)">
+                                <label class="form-check-label" for="select-${projectName}-${idx}">
+                                    <strong>${travelDate}</strong> ${origin} → ${destination}
+                                </label>
+                            </div>
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" 
+                                       id="driving-${projectName}-${idx}" 
+                                       role="switch"
+                                       ${isDriving === 'Y' ? 'checked' : ''}
+                                       onchange="updateIsDriving('${projectName}', ${idx}, this.checked)">
+                                <label class="form-check-label" for="driving-${projectName}-${idx}">
+                                    <span class="badge bg-${isDriving === 'Y' ? 'success' : 'secondary'}">
+                                        ${isDriving === 'Y' ? '自駕' : '非自駕'}
+                                    </span>
+                                </label>
+                            </div>
+                        </div>
+                        ${resultHtml}
+                        ${(oneWayKm === undefined || oneWayKm === null || oneWayKm === 0) && isDriving === 'Y' ? `
+                            <div class="mt-2 p-2 bg-warning bg-opacity-10 rounded border border-warning">
+                                <small class="text-warning">
+                                    <i class="bi bi-exclamation-triangle"></i> 
+                                    尚未計算距離，請點擊「開始計算」按鈕進行計算
+                                </small>
+                            </div>
+                        ` : ''}
+                    `;
+                    
+                    recordsContainer.appendChild(recordRow);
+                });
+
+                container.appendChild(projectBlock);
+            }
+        }
+
+        // 更新選擇狀態（是否要計算）
+        function updateSelectStatus(projectName, idx, isSelected) {
+            // 這個函數目前不需要做什麼，只是為了保持一致性
+        }
+
+        // 更新 IsDriving（是否自駕）
+        function updateIsDriving(projectName, idx, isDriving) {
+            if (currentData && currentData.projects[projectName]) {
+                currentData.projects[projectName].records[idx]['IsDriving'] = isDriving ? 'Y' : 'N';
+                // 更新顯示的徽章
+                const drivingCheckbox = document.getElementById(`driving-${projectName}-${idx}`);
+                if (drivingCheckbox) {
+                    const label = drivingCheckbox.nextElementSibling;
+                    if (label) {
+                        const badge = label.querySelector('.badge');
+                        if (badge) {
+                            badge.className = `badge bg-${isDriving ? 'success' : 'secondary'}`;
+                            badge.textContent = isDriving ? '自駕' : '非自駕';
+                        }
+                    }
+                }
+            }
+        }
+
+        // 全選所有記錄
+        function selectAllRecords() {
+            if (!currentData) return;
+            for (const [projectName, projectData] of Object.entries(currentData.projects)) {
+                projectData.records.forEach((record, idx) => {
+                    const checkbox = document.getElementById(`select-${projectName}-${idx}`);
+                    if (checkbox) {
+                        checkbox.checked = true;
+                    }
+                });
+            }
+        }
+
+        // 取消全選所有記錄
+        function deselectAllRecords() {
+            if (!currentData) return;
+            for (const [projectName, projectData] of Object.entries(currentData.projects)) {
+                projectData.records.forEach((record, idx) => {
+                    const checkbox = document.getElementById(`select-${projectName}-${idx}`);
+                    if (checkbox) {
+                        checkbox.checked = false;
+                    }
+                });
+            }
+        }
+
+        // 收集所有勾選的紀錄（用於計算）
+        function collectSelectedRecords() {
+            const allRecords = [];
+            
+            if (!currentData) return allRecords;
+
+            for (const [projectName, projectData] of Object.entries(currentData.projects)) {
+                projectData.records.forEach((record, idx) => {
+                    const checkbox = document.getElementById(`select-${projectName}-${idx}`);
+                    if (checkbox && checkbox.checked) {
+                        allRecords.push({
+                            ...record,
+                            _projectName: projectName,
+                            _index: idx
+                        });
+                    }
+                });
+            }
+
+            return allRecords;
+        }
+
+        // 開始計算
+        async function calculateAll() {
+            const records = collectSelectedRecords();
+            
+            if (records.length === 0) {
+                alert('請至少勾選一筆需要計算的資料');
+                return;
+            }
+
+            showLoading(`正在計算 ${records.length} 筆資料的里程...`);
+
+            try {
+                const result = await apiRequest('/calculate/batch', 'POST', {
+                    records: records,
+                    fixed_origin: fixedOrigin
+                });
+
+                if (result.status === 'success') {
+                    // 更新資料
+                    result.data.records.forEach(updatedRecord => {
+                        const projectName = updatedRecord._projectName;
+                        const idx = updatedRecord._index;
+                        if (currentData && currentData.projects[projectName]) {
+                            Object.assign(currentData.projects[projectName].records[idx], updatedRecord);
+                        }
+                    });
+
+                    displayResults(result.data);
+                    document.getElementById('resultSection').style.display = 'block';
+                    
+                    if (result.data.errors && result.data.errors.length > 0) {
+                        alert('部分資料計算失敗:\n' + result.data.errors.join('\n'));
+                    }
+                } else {
+                    alert('計算失敗: ' + result.message);
+                }
+            } catch (error) {
+                alert('計算錯誤: ' + error.message);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        // 顯示計算結果
+        function displayResults(data) {
+            const container = document.getElementById('resultsContainer');
+            container.innerHTML = `
+                <div class="alert alert-success">
+                    <strong>計算完成！</strong> 成功計算 ${data.calculated_count} 筆資料，共 ${data.total_count} 筆
+                </div>
+            `;
+
+            // 重新顯示預覽（含計算結果）
+            displayPreview(currentData);
+        }
+
+        // 匯出 Excel
+        async function exportExcel() {
+            if (!currentFilepath || !currentData) {
+                alert('沒有資料可匯出');
+                return;
+            }
+
+            showLoading('正在產生 Excel 檔案...');
+
+            try {
+                // 收集所有紀錄
+                const allRecords = [];
+                for (const [projectName, projectData] of Object.entries(currentData.projects)) {
+                    allRecords.push(...projectData.records);
+                }
+
+                const response = await fetch(`${API_BASE_URL}/export/excel`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${getToken()}`
+                    },
+                    body: JSON.stringify({
+                        file_path: currentFilepath,
+                        records: allRecords
+                    })
+                });
+
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `updated_${new Date().getTime()}.xlsx`;
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                } else {
+                    const result = await response.json();
+                    alert('匯出失敗: ' + result.message);
+                }
+            } catch (error) {
+                alert('匯出錯誤: ' + error.message);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        // 匯出單一計畫別 Word
+        async function exportWordSingle() {
+            if (!currentData) {
+                alert('沒有資料可匯出');
+                return;
+            }
+
+            const projectNames = Object.keys(currentData.projects);
+            if (projectNames.length === 0) {
+                alert('沒有計畫別可匯出');
+                return;
+            }
+
+            const projectName = prompt('請輸入要匯出的計畫別名稱:', projectNames[0]);
+            if (!projectName || !currentData.projects[projectName]) {
+                return;
+            }
+
+            showLoading(`正在產生 ${projectName} 的 Word 報表...`);
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/export/word`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${getToken()}`
+                    },
+                    body: JSON.stringify({
+                        project_name: projectName,
+                        records: currentData.projects[projectName].records,
+                        fixed_origin: fixedOrigin
+                    })
+                });
+
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `${projectName}_里程報表.docx`;
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                } else {
+                    const result = await response.json();
+                    alert('匯出失敗: ' + result.message);
+                }
+            } catch (error) {
+                alert('匯出錯誤: ' + error.message);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        // 匯出所有計畫別 Word（ZIP）
+        async function exportWordAll() {
+            if (!currentData) {
+                alert('沒有資料可匯出');
+                return;
+            }
+
+            showLoading('正在產生所有計畫別的 Word 報表...');
+
+            try {
+                const projects = {};
+                for (const [projectName, projectData] of Object.entries(currentData.projects)) {
+                    projects[projectName] = projectData.records;
+                }
+
+                const response = await fetch(`${API_BASE_URL}/export/word/batch`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${getToken()}`
+                    },
+                    body: JSON.stringify({
+                        projects: projects,
+                        fixed_origin: fixedOrigin
+                    })
+                });
+
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `里程報表_${new Date().getTime()}.zip`;
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                } else {
+                    const result = await response.json();
+                    alert('匯出失敗: ' + result.message);
+                }
+            } catch (error) {
+                alert('匯出錯誤: ' + error.message);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        // 顯示導航步驟
+        function showRouteSteps(projectName, idx) {
+            if (!currentData || !currentData.projects[projectName]) {
+                alert('找不到資料');
+                return;
+            }
+
+            const record = currentData.projects[projectName].records[idx];
+            const routeSteps = record.RouteSteps;
+
+            if (!routeSteps) {
+                alert('此紀錄沒有導航步驟資訊');
+                return;
+            }
+
+            // 建立彈出視窗顯示導航步驟
+            const modalHtml = `
+                <div class="modal fade" id="routeStepsModal" tabindex="-1">
+                    <div class="modal-dialog modal-lg">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title">
+                                    <i class="bi bi-signpost-2"></i> 導航路線
+                                </h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                            </div>
+                            <div class="modal-body">
+                                <div class="mb-3">
+                                    <strong>起點：</strong>${record['起點名稱'] || '-'}<br>
+                                    <strong>終點：</strong>${record['目的地名稱'] || '-'}<br>
+                                    <strong>單程距離：</strong>${record['OneWayKm'] || '-'} 公里
+                                </div>
+                                <hr>
+                                <h6><strong>【導航路線】</strong></h6>
+                                <pre style="white-space: pre-wrap; font-family: inherit;">${routeSteps}</pre>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">關閉</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // 移除舊的 modal（如果存在）
+            const existingModal = document.getElementById('routeStepsModal');
+            if (existingModal) {
+                existingModal.remove();
+            }
+
+            // 添加新的 modal
+            document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+            // 顯示 modal
+            const modal = new bootstrap.Modal(document.getElementById('routeStepsModal'));
+            modal.show();
+
+            // Modal 關閉後移除
+            document.getElementById('routeStepsModal').addEventListener('hidden.bs.modal', function () {
+                this.remove();
+            });
+        }
+    </script>
+</body>
+</html>
+
