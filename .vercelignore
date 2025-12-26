@@ -1,0 +1,61 @@
+# Vercel 部署忽略檔案
+# 不需要上傳到 Vercel 的檔案和目錄
+
+# Python 快取
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# 虛擬環境
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 日誌檔案
+*.log
+logs/
+
+# 資料庫檔案
+*.db
+*.sqlite
+*.sqlite3
+
+# 暫存檔案
+temp/
+output/
+dist/
+build/
+
+# 測試檔案
+tests/
+test_*.py
+*_test.py
+
+# 文件
+*.md
+!README.md
+
+# 批次檔和腳本（Windows 專用）
+*.bat
+*.sh
+
+# 環境變數範本（實際值在 Vercel 設定）
+.env
+env_template.txt
+
+# 打包相關
+*.spec
+build_exe.spec
+
+# 其他
+.DS_Store
+Thumbs.db
+
