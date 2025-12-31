@@ -51,28 +51,33 @@ def calculate_distance():
         origin_address = place_mapping.get_address(origin) or origin
         destination_address = place_mapping.get_address(destination) or destination
         
-        # 計算距離
-        result = maps_service.calculate_distance(origin_address, destination_address)
+        # 使用 get_route_detail 取得詳細路線資訊（包含替代路線和官方樣式地圖）
+        route_detail = maps_service.get_route_detail(origin_address, destination_address, alternatives=True)
         
-        if not result['success']:
+        if not route_detail['success']:
             return jsonify({
                 'status': 'error',
-                'message': result.get('error', '計算距離失敗')
+                'message': route_detail.get('error', '計算距離失敗')
             }), 400
         
-        # 下載靜態地圖
-        map_image_path = maps_service.download_static_map(
+        # 使用 Google Maps 官方樣式靜態地圖
+        alternative_polylines = route_detail.get('alternative_polylines', [])
+        map_image_path = maps_service.download_static_map_with_polyline(
+            route_detail['polyline'],
             origin_address,
-            destination_address
+            destination_address,
+            distance_km=route_detail['distance_km'],
+            alternative_polylines=alternative_polylines
         )
         
         response_data = {
             'status': 'success',
             'data': {
-                'one_way_km': result['one_way_km'],
-                'round_trip_km': result['round_trip_km'],
-                'estimated_time': result['estimated_time'],
-                'navigation_url': result['navigation_url'],
+                'one_way_km': route_detail['distance_km'],
+                'round_trip_km': route_detail['round_trip_km'],
+                'estimated_time': route_detail.get('estimated_time'),  # 時間文字
+                'estimated_seconds': route_detail.get('estimated_seconds'),  # 時間秒數
+                'navigation_url': route_detail['map_url'],
                 'map_image_path': map_image_path,
                 'origin_address': origin_address,
                 'destination_address': destination_address
@@ -82,7 +87,7 @@ def calculate_distance():
         # 清理使用者輸入以防止日誌注入（CVE-2024-1681）
         safe_origin = sanitize_log_input(origin)
         safe_destination = sanitize_log_input(destination)
-        logger.info(f"成功計算距離: {safe_origin} -> {safe_destination}, {result['one_way_km']} 公里")
+        logger.info(f"成功計算距離: {safe_origin} -> {safe_destination}, {route_detail['distance_km']} 公里")
         
         return jsonify(response_data), 200
         
@@ -200,8 +205,8 @@ def calculate_batch():
                 # 記錄實際使用的地址（用於除錯）
                 logger.info(f"第 {idx + 1} 筆資料計算: {origin_name} ({origin_address}) -> {destination_name} ({destination_address})")
                 
-                # 使用新的 get_route_detail 取得詳細路線資訊
-                route_detail = maps_service.get_route_detail(origin_address, destination_address)
+                # 使用新的 get_route_detail 取得詳細路線資訊（包含替代路線）
+                route_detail = maps_service.get_route_detail(origin_address, destination_address, alternatives=True)
                 
                 if not route_detail['success']:
                     error_msg = route_detail.get('error', '未知錯誤')
@@ -250,14 +255,17 @@ def calculate_batch():
                     logger.warning(f"Playwright 截圖過程發生錯誤: {str(e)}，回退使用靜態地圖")
                     screenshot_path = None
                 
-                # 如果 Playwright 截圖失敗，回退使用原本的靜態地圖
+                # 如果 Playwright 截圖失敗，回退使用 Google Maps 官方樣式靜態地圖
                 if not screenshot_path or not os.path.exists(screenshot_path):
-                    logger.info("回退使用靜態地圖")
+                    logger.info("回退使用 Google Maps 官方樣式靜態地圖")
+                    # 取得替代路線（如果有的話）
+                    alternative_polylines = route_detail.get('alternative_polylines', [])
                     map_image_path = maps_service.download_static_map_with_polyline(
                         route_detail['polyline'],
                         origin_address,
                         destination_address,
-                        distance_km=route_detail['distance_km']
+                        distance_km=route_detail['distance_km'],
+                        alternative_polylines=alternative_polylines  # 傳入替代路線
                     )
                     if map_image_path:
                         screenshot_path = map_image_path
