@@ -387,14 +387,14 @@ class GoogleMapsService:
             # 主要路線：使用 Google Maps 官方的藍色（#4285F4）
             # weight=6: 路線粗細（符合 Google Maps 網頁版主要路線）
             # fillcolor: 路線填充顏色（半透明藍色，符合官方樣式）
-            main_path = f"color:0x4285F4|weight:6|fillcolor:0x4285F480|enc:{polyline}"
+            main_path = f"color:0x4285F4|weight:6|enc:{polyline}"
             url_parts.append(f"path={quote(main_path)}")
             
             # 替代路線：使用灰色（#808080），較細的線條
             # 符合 Google Maps 網頁版顯示替代路線的方式
             if alternative_polylines:
                 for alt_polyline in alternative_polylines:
-                    alt_path = f"color:0x808080|weight:4|fillcolor:0x80808040|enc:{alt_polyline}"
+                    alt_path = f"color:0x808080|weight:4|enc:{alt_polyline}"
                     url_parts.append(f"path={quote(alt_path)}")
             
             # 起點標記：紅色圓點（Google Maps 官方起點顏色）
