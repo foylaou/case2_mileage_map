@@ -1,328 +1,266 @@
-"""
-里程計算路由
-"""
 from flask import Blueprint, request, jsonify
+from loguru import logger
+
 from services.google_maps_service import GoogleMapsService
 from services.place_mapping import PlaceMappingService
 from services.gmap_screenshot_service import capture_route_screenshot_sync
-from loguru import logger
+
 from utils.log_sanitizer import sanitize_log_input
 from utils.path_manager import get_temp_maps_dir, get_relative_path
+
 from datetime import datetime
 from pathlib import Path
-import os
 
-bp = Blueprint('calculate', __name__)
+bp = Blueprint("calculate", __name__)
 maps_service = GoogleMapsService()
 place_mapping = PlaceMappingService()
 
 
-@bp.route('/distance', methods=['POST'])
+@bp.route("/distance", methods=["POST"])
 def calculate_distance():
     """
     計算單筆距離
-    
-    請求:
-        {
-            "origin": "地址字串",
-            "destination": "地址字串"
-        }
-    
-    回應:
-        {
-            "one_way_km": 單程公里數,
-            "round_trip_km": 往返公里數,
-            "navigation_url": Google Map 導航網址,
-            "map_image_path": 靜態地圖檔案路徑
-        }
     """
     try:
-        data = request.get_json()
-        origin = data.get('origin', '').strip()
-        destination = data.get('destination', '').strip()
-        
+        data = request.get_json() or {}
+        origin = (data.get("origin") or "").strip()
+        destination = (data.get("destination") or "").strip()
+
         if not origin or not destination:
-            return jsonify({
-                'status': 'error',
-                'message': '請提供起點和終點'
-            }), 400
-        
-        # 解析地點名稱（如果需要的話）
+            return jsonify({"status": "error", "message": "請提供起點和終點"}), 400
+
         origin_address = place_mapping.get_address(origin) or origin
         destination_address = place_mapping.get_address(destination) or destination
-        
-        # 使用 get_route_detail 取得詳細路線資訊（包含替代路線和官方樣式地圖）
-        route_detail = maps_service.get_route_detail(origin_address, destination_address, alternatives=True)
-        
-        if not route_detail['success']:
+
+        route_detail = maps_service.get_route_detail(
+            origin_address, destination_address, alternatives=True
+        )
+
+        if not route_detail.get("success"):
             return jsonify({
-                'status': 'error',
-                'message': route_detail.get('error', '計算距離失敗')
+                "status": "error",
+                "message": route_detail.get("error", "計算距離失敗")
             }), 400
-        
-        # 使用 Google Maps 官方樣式靜態地圖
-        alternative_polylines = route_detail.get('alternative_polylines', [])
+
+        alternative_polylines = route_detail.get("alternative_polylines", [])
         map_image_path = maps_service.download_static_map_with_polyline(
-            route_detail['polyline'],
+            route_detail["polyline"],
             origin_address,
             destination_address,
-            distance_km=route_detail['distance_km'],
-            alternative_polylines=alternative_polylines
+            distance_km=route_detail["distance_km"],
+            alternative_polylines=alternative_polylines,
         )
-        
+
         response_data = {
-            'status': 'success',
-            'data': {
-                'one_way_km': route_detail['distance_km'],
-                'round_trip_km': route_detail['round_trip_km'],
-                'estimated_time': route_detail.get('estimated_time'),  # 時間文字
-                'estimated_seconds': route_detail.get('estimated_seconds'),  # 時間秒數
-                'navigation_url': route_detail['map_url'],
-                'map_image_path': map_image_path,
-                'origin_address': origin_address,
-                'destination_address': destination_address
-            }
+            "status": "success",
+            "data": {
+                "one_way_km": route_detail["distance_km"],
+                "round_trip_km": route_detail["round_trip_km"],
+                "estimated_time": route_detail.get("estimated_time"),
+                "estimated_seconds": route_detail.get("estimated_seconds"),
+                "navigation_url": route_detail["map_url"],
+                "map_image_path": map_image_path,
+                "origin_address": origin_address,
+                "destination_address": destination_address,
+            },
         }
-        
-        # 清理使用者輸入以防止日誌注入（CVE-2024-1681）
+
         safe_origin = sanitize_log_input(origin)
         safe_destination = sanitize_log_input(destination)
         logger.info(f"成功計算距離: {safe_origin} -> {safe_destination}, {route_detail['distance_km']} 公里")
-        
+
         return jsonify(response_data), 200
-        
+
     except Exception as e:
         logger.error(f"計算距離錯誤: {str(e)}")
-        return jsonify({
-            'status': 'error',
-            'message': f'計算距離失敗: {str(e)}'
-        }), 500
+        return jsonify({"status": "error", "message": f"計算距離失敗: {str(e)}"}), 500
 
 
-@bp.route('/batch', methods=['POST'])
+@bp.route("/batch", methods=["POST"])
 def calculate_batch():
     """
     批次計算多筆距離
-    
-    請求:
-        {
-            "records": [
-                {
-                    "起點名稱": "...",
-                    "目的地名稱": "...",
-                    "IsDriving": "Y" or "N",
-                    ...
-                },
-                ...
-            ],
-            "fixed_origin": "固定起點地址（可選）"
-        }
-    
-    回應:
-        {
-            "records": 更新後的紀錄列表（含計算結果）
-        }
     """
     try:
-        data = request.get_json()
-        records = data.get('records', [])
-        fixed_origin = data.get('fixed_origin', '')
-        
+        data = request.get_json() or {}
+        records = data.get("records", []) or []
+        fixed_origin = (data.get("fixed_origin") or "").strip()
+
         if not records:
-            return jsonify({
-                'status': 'error',
-                'message': '沒有提供資料'
-            }), 400
-        
-        # 處理每筆紀錄
+            return jsonify({"status": "error", "message": "沒有提供資料"}), 400
+
         updated_records = []
         errors = []
-        
+
         for idx, record in enumerate(records):
             try:
-                # 只計算 IsDriving=Y 的紀錄
-                is_driving = record.get('IsDriving', 'N')
-                if is_driving.upper() != 'Y':
-                    # 不計算，但保留原始資料
+                is_driving = (record.get("IsDriving", "N") or "N").upper()
+                if is_driving != "Y":
                     updated_records.append(record)
                     continue
-                
-                # 取得起點和終點
-                origin_name = record.get('起點名稱', '')
-                destination_name = record.get('目的地名稱', '')
-                
+
+                origin_name = (record.get("起點名稱") or "").strip()
+                destination_name = (record.get("目的地名稱") or "").strip()
+
                 if not origin_name or not destination_name:
                     errors.append(f"第 {idx + 1} 筆資料缺少起點或終點")
                     updated_records.append(record)
                     continue
-                
-                # 使用固定起點或原始起點
+
+                # 起點
                 if fixed_origin:
                     origin_address = fixed_origin
                 else:
-                    # 優先使用 Google Maps 地理編碼解析地點名稱
-                    # 如果解析失敗，再嘗試地址對應表
                     origin_geocode = maps_service.geocode(origin_name)
                     if origin_geocode:
-                        origin_address = origin_geocode['formatted_address']
+                        origin_address = origin_geocode.get("formatted_address", origin_name)
                         logger.info(f"第 {idx + 1} 筆資料起點 Google Maps 解析成功: {origin_name} -> {origin_address}")
                     else:
-                        # Google Maps 解析失敗，嘗試地址對應表
                         mapped_origin = place_mapping.get_address(origin_name)
                         origin_address = mapped_origin if mapped_origin else origin_name
                         if mapped_origin:
                             logger.info(f"第 {idx + 1} 筆資料起點使用對應表: {origin_name} -> {origin_address}")
                         else:
                             logger.warning(f"第 {idx + 1} 筆資料起點無法解析，使用原始名稱: {origin_name}")
-                
-                # 優先使用 Google Maps 地理編碼解析終點名稱
+
+                # 終點
                 destination_geocode = maps_service.geocode(destination_name)
                 if destination_geocode:
-                    destination_address = destination_geocode['formatted_address']
+                    destination_address = destination_geocode.get("formatted_address", destination_name)
                     logger.info(f"第 {idx + 1} 筆資料終點 Google Maps 解析成功: {destination_name} -> {destination_address}")
                 else:
-                    # Google Maps 解析失敗，嘗試地址對應表
                     mapped_destination = place_mapping.get_address(destination_name)
                     destination_address = mapped_destination if mapped_destination else destination_name
                     if mapped_destination:
                         logger.info(f"第 {idx + 1} 筆資料終點使用對應表: {destination_name} -> {destination_address}")
                     else:
                         logger.warning(f"第 {idx + 1} 筆資料終點無法解析，使用原始名稱: {destination_name}")
-                
-                # 檢查起點和終點是否相同
+
+                # 起終點檢查
                 if origin_address == destination_address and origin_name == destination_name:
-                    # 如果地址和名稱都相同，則無法計算
                     errors.append(f"第 {idx + 1} 筆資料起點和終點完全相同: {origin_name}")
                     logger.warning(f"第 {idx + 1} 筆資料起點和終點完全相同: {origin_name}")
                     updated_records.append(record)
                     continue
                 elif origin_address == destination_address and origin_name != destination_name:
-                    # 如果對應後的地址相同，但原始名稱不同，改用原始名稱進行計算
                     logger.info(f"第 {idx + 1} 筆資料對應地址相同，改用原始名稱計算: {origin_name} -> {destination_name}")
                     origin_address = origin_name
                     destination_address = destination_name
-                
-                # 記錄實際使用的地址（用於除錯）
-                logger.info(f"第 {idx + 1} 筆資料計算: {origin_name} ({origin_address}) -> {destination_name} ({destination_address})")
-                
-                # 使用新的 get_route_detail 取得詳細路線資訊（包含替代路線）
-                route_detail = maps_service.get_route_detail(origin_address, destination_address, alternatives=True)
-                
-                if not route_detail['success']:
-                    error_msg = route_detail.get('error', '未知錯誤')
+
+                safe_origin = sanitize_log_input(origin_address)
+                safe_destination = sanitize_log_input(destination_address)
+                logger.info(f"第 {idx + 1} 筆資料計算: {origin_name} ({safe_origin}) -> {destination_name} ({safe_destination})")
+
+                route_detail = maps_service.get_route_detail(
+                    origin_address, destination_address, alternatives=True
+                )
+
+                if not route_detail.get("success"):
+                    error_msg = route_detail.get("error", "未知錯誤")
                     errors.append(f"第 {idx + 1} 筆資料計算失敗: {error_msg}")
-                    logger.warning(f"第 {idx + 1} 筆資料計算失敗: {origin_address} -> {destination_address}, 錯誤: {error_msg}")
-                    # 即使計算失敗，也保留原始資料
+                    logger.warning(f"第 {idx + 1} 筆資料計算失敗: {safe_origin} -> {safe_destination}, 錯誤: {error_msg}")
                     updated_records.append(record)
                     continue
-                
-                # 檢查距離是否為 0（可能是地址解析失敗）
-                distance_km = route_detail.get('distance_km', 0)
+
+                distance_km = route_detail.get("distance_km", 0) or 0
                 if distance_km == 0:
                     errors.append(f"第 {idx + 1} 筆資料計算結果為 0 公里，請檢查地址是否正確: {origin_address} -> {destination_address}")
-                    logger.warning(f"第 {idx + 1} 筆資料計算結果為 0 公里: {origin_address} -> {destination_address}")
-                    # 即使距離為 0，也保留原始資料，但不更新距離欄位
+                    logger.warning(f"第 {idx + 1} 筆資料計算結果為 0 公里: {safe_origin} -> {safe_destination}")
                     updated_records.append(record)
                     continue
-                
-                # 使用 Playwright 截取 Google Maps 完整路線頁面（包含左側面板和右側地圖）
-                screenshot_path = None
+
+                # Playwright 截圖（完整路線頁）
+                screenshot_path: Path | None = None
                 try:
-                    # 準備輸出路徑（使用相對路徑）
-                    temp_maps_dir = get_temp_maps_dir()
-                    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:-3]  # 包含毫秒
+                    temp_maps_dir = get_temp_maps_dir()  # Path
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
                     screenshot_filename = f"gmap_route_{timestamp}.png"
-                    screenshot_path = temp_maps_dir / screenshot_filename
-                    
-                    # 使用 Playwright 截取 Google Maps 路線頁面
-                    logger.info(f"開始使用 Playwright 截取 Google Maps 路線: {origin_address} -> {destination_address}")
+                    expected_path = temp_maps_dir / screenshot_filename
+
+                    logger.info(f"開始使用 Playwright 截取 Google Maps 路線: {safe_origin} -> {safe_destination}")
                     screenshot_result = capture_route_screenshot_sync(
                         origin=origin_address,
                         destination=destination_address,
-                        output_path=str(screenshot_path),
+                        output_path=str(expected_path),
                         viewport_width=1500,
-                        viewport_height=750
+                        viewport_height=750,
                     )
-                    
+
                     if screenshot_result:
-                        screenshot_path = screenshot_result
+                        # 有些實作會回傳字串路徑
+                        screenshot_path = Path(screenshot_result)
+                    else:
+                        screenshot_path = expected_path if expected_path.exists() else None
+
+                    if screenshot_path and screenshot_path.exists():
                         logger.info(f"成功截取 Google Maps 路線截圖: {screenshot_path}")
                     else:
                         logger.warning("Playwright 截圖失敗，回退使用靜態地圖")
                         screenshot_path = None
-                        
+
                 except Exception as e:
                     logger.warning(f"Playwright 截圖過程發生錯誤: {str(e)}，回退使用靜態地圖")
                     screenshot_path = None
-                
-                # 如果 Playwright 截圖失敗，回退使用 Google Maps 官方樣式靜態地圖
-                if not screenshot_path or not os.path.exists(screenshot_path):
+
+                # 回退：Google Maps 官方樣式靜態地圖（含替代路線）
+                if not screenshot_path:
                     logger.info("回退使用 Google Maps 官方樣式靜態地圖")
-                    # 取得替代路線（如果有的話）
-                    alternative_polylines = route_detail.get('alternative_polylines', [])
+                    alternative_polylines = route_detail.get("alternative_polylines", [])
                     map_image_path = maps_service.download_static_map_with_polyline(
-                        route_detail['polyline'],
+                        route_detail["polyline"],
                         origin_address,
                         destination_address,
-                        distance_km=route_detail['distance_km'],
-                        alternative_polylines=alternative_polylines  # 傳入替代路線
+                        distance_km=route_detail["distance_km"],
+                        alternative_polylines=alternative_polylines,
                     )
                     if map_image_path:
-                        screenshot_path = map_image_path
-                
+                        screenshot_path = Path(map_image_path) if not isinstance(map_image_path, Path) else map_image_path
+
                 # 更新紀錄
-                record['OneWayKm'] = route_detail['distance_km']
-                record['RoundTripKm'] = route_detail['round_trip_km']
-                record['GoogleMapUrl'] = route_detail['map_url']
-                record['StepCount'] = route_detail['step_count']
-                record['Polyline'] = route_detail['polyline']
-                record['RouteSteps'] = route_detail['route_steps_text']
-                
-                # 保存完整地址（用於 Word 報表顯示）
-                record['OriginAddress'] = origin_address
-                record['DestinationAddress'] = destination_address
-                
-                # 保存時間資訊（如果有）
-                if 'estimated_time' in route_detail:
-                    record['EstimatedTime'] = route_detail['estimated_time']
-                
-                # 將地圖路徑轉換為相對路徑（用於前端顯示）
-                if screenshot_path:
-                    # 將絕對路徑轉換為相對路徑，例如：temp/maps/gmap_route_xxx.png
-                    record['StaticMapImage'] = get_relative_path(screenshot_path)
+                record["OneWayKm"] = route_detail["distance_km"]
+                record["RoundTripKm"] = route_detail["round_trip_km"]
+                record["GoogleMapUrl"] = route_detail["map_url"]
+                record["StepCount"] = route_detail.get("step_count")
+                record["Polyline"] = route_detail.get("polyline")
+                record["RouteSteps"] = route_detail.get("route_steps_text")
+
+                record["OriginAddress"] = origin_address
+                record["DestinationAddress"] = destination_address
+
+                if "estimated_time" in route_detail:
+                    record["EstimatedTime"] = route_detail.get("estimated_time")
+
+                if screenshot_path and screenshot_path.exists():
+                    record["StaticMapImage"] = get_relative_path(str(screenshot_path))
                 else:
-                    record['StaticMapImage'] = None
-                
+                    record["StaticMapImage"] = None
+
                 updated_records.append(record)
-                
+
             except Exception as e:
                 logger.error(f"處理第 {idx + 1} 筆資料錯誤: {str(e)}")
                 errors.append(f"第 {idx + 1} 筆資料處理失敗: {str(e)}")
                 updated_records.append(record)
-        
+
+        calculated_count = sum(
+            1 for r in updated_records
+            if ("OneWayKm" in r) and (r.get("OneWayKm") is not None)
+        )
+
         response_data = {
-            'status': 'success',
-            'data': {
-                'records': updated_records,
-                'total_count': len(updated_records),
-                'calculated_count': sum(1 for r in updated_records if r.get('OneWayKm') is not None),
-                'errors': errors
-            }
+            "status": "success",
+            "data": {
+                "records": updated_records,
+                "total_count": len(updated_records),
+                "calculated_count": calculated_count,
+                "errors": errors,
+            },
+            "message": f"部分資料計算失敗: {len(errors)} 筆" if errors else f"成功計算 {calculated_count} 筆資料",
         }
-        
-        if errors:
-            response_data['message'] = f'部分資料計算失敗: {len(errors)} 筆'
-        else:
-            response_data['message'] = f'成功計算 {response_data["data"]["calculated_count"]} 筆資料'
-        
-        logger.info(f"批次計算完成: {len(updated_records)} 筆, 成功 {response_data['data']['calculated_count']} 筆")
-        
+
+        logger.info(f"批次計算完成: {len(updated_records)} 筆, 成功 {calculated_count} 筆")
         return jsonify(response_data), 200
-        
+
     except Exception as e:
         logger.error(f"批次計算錯誤: {str(e)}")
-        return jsonify({
-            'status': 'error',
-            'message': f'批次計算失敗: {str(e)}'
-        }), 500
-
+        return jsonify({"status": "error", "message": f"批次計算失敗: {str(e)}"}), 500
