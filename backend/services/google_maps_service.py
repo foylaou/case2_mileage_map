@@ -243,12 +243,14 @@ class GoogleMapsService:
     # =========================
     # NEW: map annotation (km + A/B formatted address + generated time)
     # =========================
-    def _annotate_map_info(self, image_path: str, km, origin_addr: str, dest_addr: str):
+    def _annotate_map_info(self, image_path: str, km, origin_addr: str, dest_addr: str, 
+                          origin_lat=None, origin_lng=None, dest_lat=None, dest_lng=None):
         """
         產生「報表型」地圖（推薦）：
         - 原地圖不被遮擋
         - 底部新增白色資訊欄：A/B 地址 + 系統產出時間
         - 左上角顯示 km badge
+        - 地圖上顯示中文「起點」和「終點」標記
         """
         try:
             base = Image.open(image_path).convert("RGB")
@@ -262,21 +264,58 @@ class GoogleMapsService:
             draw = ImageDraw.Draw(canvas)
 
             def load_font(size: int):
-                """載入字體：優先使用專案字體，失敗則使用預設字體"""
-                # 從專案路徑載入字體：backend/fonts/NotoSansCJK-Regular.ttc
+                """載入字體：優先使用專案字體，失敗則嘗試系統中文字體"""
+                # 1. 優先：從專案路徑載入字體：backend/fonts/NotoSansCJK-Regular.ttc
                 font_path = Path(__file__).parent.parent / "fonts" / "NotoSansCJK-Regular.ttc"
                 
                 if font_path.exists():
                     try:
-                        return ImageFont.truetype(str(font_path), size)
+                        font = ImageFont.truetype(str(font_path), size)
+                        logger.debug(f"成功載入專案字體: {font_path}")
+                        return font
                     except Exception as e:
-                        logger.warning(f"無法載入專案字體 {font_path}: {str(e)}，使用預設字體")
+                        logger.warning(f"無法載入專案字體 {font_path}: {str(e)}")
                 
-                # 回退到預設字體
+                # 2. 回退：嘗試載入系統中文字體
+                system_fonts = []
+                
+                # Windows 系統字體
+                if os.name == "nt":
+                    windows_font_dir = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts"
+                    system_fonts.extend([
+                        windows_font_dir / "msjh.ttc",  # 微軟正黑體
+                        windows_font_dir / "msjhbd.ttc",  # 微軟正黑體 Bold
+                        windows_font_dir / "simsun.ttc",  # 新細明體
+                        windows_font_dir / "mingliu.ttc",  # 細明體
+                    ])
+                # Linux 系統字體
+                else:
+                    system_fonts.extend([
+                        Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+                        Path("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
+                        Path("/usr/share/fonts/truetype/arphic/uming.ttc"),
+                        Path("/usr/share/fonts/truetype/arphic/ukai.ttc"),
+                        Path("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"),
+                    ])
+                
+                # 嘗試載入系統字體
+                for sys_font_path in system_fonts:
+                    if sys_font_path.exists():
+                        try:
+                            font = ImageFont.truetype(str(sys_font_path), size)
+                            logger.debug(f"成功載入系統字體: {sys_font_path}")
+                            return font
+                        except Exception as e:
+                            logger.debug(f"無法載入系統字體 {sys_font_path}: {str(e)}")
+                            continue
+                
+                # 3. 最後回退：使用預設字體（可能不支援中文，但至少不會報錯）
+                logger.warning("無法載入任何中文字體，使用預設字體（可能無法顯示中文）")
                 return ImageFont.load_default()
 
             font_km = load_font(32)
             font_text = load_font(26)
+            font_marker = load_font(24)  # 標記文字字體
 
             def wrap_text(text: str, max_width_px: int, font: ImageFont.ImageFont) -> list[str]:
                 text = (text or "").strip()
@@ -310,6 +349,93 @@ class GoogleMapsService:
                     width=2,
                 )
                 draw.text((x, y), km_text, fill=(220, 0, 0), font=font_km)
+
+            # 1.5) 在地圖上繪製中文「起點」和「終點」標記
+            # 由於無法精確計算經緯度到像素的轉換，我們在標記附近繪製中文文字
+            # 假設標記在地圖的左下（起點）和右上（終點）區域
+            marker_radius = 15  # 標記圓圈半徑
+            
+            # 起點標記（左下區域）
+            origin_x = int(W * 0.15)  # 左側 15% 位置
+            origin_y = int(H * 0.85)  # 下方 85% 位置
+            
+            # 繪製紅色圓圈
+            draw.ellipse(
+                [origin_x - marker_radius, origin_y - marker_radius,
+                 origin_x + marker_radius, origin_y + marker_radius],
+                fill=(255, 0, 0),
+                outline=(200, 0, 0),
+                width=2
+            )
+            # 繪製「起」字
+            origin_text = "起"
+            origin_bbox = draw.textbbox((0, 0), origin_text, font=font_marker)
+            origin_text_w = origin_bbox[2] - origin_bbox[0]
+            origin_text_h = origin_bbox[3] - origin_bbox[1]
+            draw.text(
+                (origin_x - origin_text_w // 2, origin_y - origin_text_h // 2),
+                origin_text,
+                fill=(255, 255, 255),
+                font=font_marker
+            )
+            # 在標記下方繪製「起點」文字
+            start_label = "起點"
+            start_bbox = draw.textbbox((0, 0), start_label, font=font_marker)
+            start_label_w = start_bbox[2] - start_bbox[0]
+            draw.rectangle(
+                [origin_x - start_label_w // 2 - 6, origin_y + marker_radius + 2,
+                 origin_x + start_label_w // 2 + 6, origin_y + marker_radius + 2 + (start_bbox[3] - start_bbox[1]) + 4],
+                fill=(255, 255, 255),
+                outline=(255, 0, 0),
+                width=1
+            )
+            draw.text(
+                (origin_x - start_label_w // 2, origin_y + marker_radius + 4),
+                start_label,
+                fill=(255, 0, 0),
+                font=font_marker
+            )
+            
+            # 終點標記（右上區域）
+            dest_x = int(W * 0.85)  # 右側 85% 位置
+            dest_y = int(H * 0.15)  # 上方 15% 位置
+            
+            # 繪製紅色圓圈
+            draw.ellipse(
+                [dest_x - marker_radius, dest_y - marker_radius,
+                 dest_x + marker_radius, dest_y + marker_radius],
+                fill=(255, 0, 0),
+                outline=(200, 0, 0),
+                width=2
+            )
+            # 繪製「終」字
+            dest_text = "終"
+            dest_bbox = draw.textbbox((0, 0), dest_text, font=font_marker)
+            dest_text_w = dest_bbox[2] - dest_bbox[0]
+            dest_text_h = dest_bbox[3] - dest_bbox[1]
+            draw.text(
+                (dest_x - dest_text_w // 2, dest_y - dest_text_h // 2),
+                dest_text,
+                fill=(255, 255, 255),
+                font=font_marker
+            )
+            # 在標記下方繪製「終點」文字
+            end_label = "終點"
+            end_bbox = draw.textbbox((0, 0), end_label, font=font_marker)
+            end_label_w = end_bbox[2] - end_bbox[0]
+            draw.rectangle(
+                [dest_x - end_label_w // 2 - 6, dest_y + marker_radius + 2,
+                 dest_x + end_label_w // 2 + 6, dest_y + marker_radius + 2 + (end_bbox[3] - end_bbox[1]) + 4],
+                fill=(255, 255, 255),
+                outline=(255, 0, 0),
+                width=1
+            )
+            draw.text(
+                (dest_x - end_label_w // 2, dest_y + marker_radius + 4),
+                end_label,
+                fill=(255, 0, 0),
+                font=font_marker
+            )
 
             # 2) Footer 區
             footer_top = H
@@ -412,13 +538,8 @@ class GoogleMapsService:
                     alt_path = f"color:0x808080|weight:4|enc:{alt_polyline}"
                     url_parts.append(f"path={quote(alt_path)}")
 
-            # 起點：紅色標記，標籤 A
-            origin_marker = f"color:0xFF0000|label:A|{origin_geo['lat']},{origin_geo['lng']}"
-            url_parts.append(f"markers={quote(origin_marker)}")
-
-            # 終點：紅色標記，標籤 B（改為紅色以符合圖B樣式）
-            destination_marker = f"color:0xFF0000|label:B|{destination_geo['lat']},{destination_geo['lng']}"
-            url_parts.append(f"markers={quote(destination_marker)}")
+            # 不在地圖 API 中加入標記，改為在 _annotate_map_info 中繪製中文標記
+            # 這樣可以顯示中文「起點」和「終點」
 
             url_parts.append(f"key={self.api_key}")
 
@@ -449,12 +570,16 @@ class GoogleMapsService:
             with open(str(output_path), "wb") as f:
                 f.write(response.content)
 
-            # 加註：公里數 + A/B 地址（formatted address）+ 系統產出時間
+            # 加註：公里數 + A/B 地址（formatted address）+ 系統產出時間 + 中文標記
             self._annotate_map_info(
                 str(output_path),
                 distance_km,
                 origin_geo.get("formatted_address", origin_address),
                 destination_geo.get("formatted_address", destination_address),
+                origin_geo.get("lat"),
+                origin_geo.get("lng"),
+                destination_geo.get("lat"),
+                destination_geo.get("lng"),
             )
 
             logger.info(f"成功下載 Google Maps 官方樣式靜態地圖: {str(output_path)}")
@@ -506,7 +631,22 @@ class GoogleMapsService:
             origin_fmt = origin_geo.get("formatted_address", origin_address)
             dest_fmt = dest_geo.get("formatted_address", destination_address)
 
-            self._annotate_map_info(str(output_path), distance_km, origin_fmt, dest_fmt)
+            # 取得座標（如果有的話）
+            origin_lat = origin_geo.get("lat") if origin_geo else None
+            origin_lng = origin_geo.get("lng") if origin_geo else None
+            dest_lat = dest_geo.get("lat") if dest_geo else None
+            dest_lng = dest_geo.get("lng") if dest_geo else None
+
+            self._annotate_map_info(
+                str(output_path), 
+                distance_km, 
+                origin_fmt, 
+                dest_fmt,
+                origin_lat,
+                origin_lng,
+                dest_lat,
+                dest_lng
+            )
 
             logger.info(f"成功下載簡單靜態地圖: {str(output_path)}")
             return str(output_path)
