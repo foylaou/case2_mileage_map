@@ -64,8 +64,8 @@ def test_screenshot():
                 origin=origin,
                 destination=destination,
                 output_path=str(expected_path),
-                viewport_width=1500,
-                viewport_height=750,
+                viewport_width=1920,
+                viewport_height=1080,
             )
 
             if screenshot_result:
@@ -286,8 +286,8 @@ def calculate_batch():
                         origin=origin_address,
                         destination=destination_address,
                         output_path=str(expected_path),
-                        viewport_width=1500,
-                        viewport_height=750,
+                        viewport_width=1920,
+                        viewport_height=1080,
                     )
 
                     if screenshot_result:
