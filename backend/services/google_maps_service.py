@@ -412,10 +412,12 @@ class GoogleMapsService:
                     alt_path = f"color:0x808080|weight:4|enc:{alt_polyline}"
                     url_parts.append(f"path={quote(alt_path)}")
 
+            # 起點：紅色標記，標籤 A
             origin_marker = f"color:0xFF0000|label:A|{origin_geo['lat']},{origin_geo['lng']}"
             url_parts.append(f"markers={quote(origin_marker)}")
 
-            destination_marker = f"color:0x00FF00|label:B|{destination_geo['lat']},{destination_geo['lng']}"
+            # 終點：紅色標記，標籤 B（改為紅色以符合圖B樣式）
+            destination_marker = f"color:0xFF0000|label:B|{destination_geo['lat']},{destination_geo['lng']}"
             url_parts.append(f"markers={quote(destination_marker)}")
 
             url_parts.append(f"key={self.api_key}")
