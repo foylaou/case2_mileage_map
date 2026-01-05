@@ -253,6 +253,14 @@ class GoogleMapsService:
         - 地圖上顯示中文「起點」和「終點」標記
         """
         try:
+            # 確保地址是字串且正確處理
+            origin_addr = str(origin_addr) if origin_addr else ""
+            dest_addr = str(dest_addr) if dest_addr else ""
+            
+            # 記錄地址資訊（用於除錯）
+            logger.debug(f"標註地圖資訊 - 起點地址: {origin_addr[:50]}...")
+            logger.debug(f"標註地圖資訊 - 終點地址: {dest_addr[:50]}...")
+            
             base = Image.open(image_path).convert("RGB")
             W, H = base.size
 
@@ -316,6 +324,14 @@ class GoogleMapsService:
             font_km = load_font(32)
             font_text = load_font(26)
             font_marker = load_font(24)  # 標記文字字體
+            
+            # 測試字體是否能正確顯示中文
+            test_text = "測試"
+            try:
+                test_bbox = draw.textbbox((0, 0), test_text, font=font_text)
+                logger.debug(f"字體測試成功，可以顯示中文: {test_text}")
+            except Exception as e:
+                logger.warning(f"字體測試失敗，可能無法顯示中文: {str(e)}")
 
             def wrap_text(text: str, max_width_px: int, font: ImageFont.ImageFont) -> list[str]:
                 text = (text or "").strip()
@@ -571,15 +587,26 @@ class GoogleMapsService:
                 f.write(response.content)
 
             # 加註：公里數 + A/B 地址（formatted address）+ 系統產出時間 + 中文標記
+            # 確保使用正確的中文地址
+            origin_display_addr = origin_geo.get("formatted_address") if origin_geo else None
+            if not origin_display_addr:
+                origin_display_addr = origin_address
+            dest_display_addr = destination_geo.get("formatted_address") if destination_geo else None
+            if not dest_display_addr:
+                dest_display_addr = destination_address
+            
+            logger.debug(f"標註地圖 - 起點地址: {origin_display_addr[:50] if origin_display_addr else 'None'}...")
+            logger.debug(f"標註地圖 - 終點地址: {dest_display_addr[:50] if dest_display_addr else 'None'}...")
+            
             self._annotate_map_info(
                 str(output_path),
                 distance_km,
-                origin_geo.get("formatted_address", origin_address),
-                destination_geo.get("formatted_address", destination_address),
-                origin_geo.get("lat"),
-                origin_geo.get("lng"),
-                destination_geo.get("lat"),
-                destination_geo.get("lng"),
+                origin_display_addr or origin_address,
+                dest_display_addr or destination_address,
+                origin_geo.get("lat") if origin_geo else None,
+                origin_geo.get("lng") if origin_geo else None,
+                destination_geo.get("lat") if destination_geo else None,
+                destination_geo.get("lng") if destination_geo else None,
             )
 
             logger.info(f"成功下載 Google Maps 官方樣式靜態地圖: {str(output_path)}")
@@ -628,8 +655,17 @@ class GoogleMapsService:
             # 嘗試拿 formatted address（沒有就用原字串）
             origin_geo = self.geocode(origin_address) or {}
             dest_geo = self.geocode(destination_address) or {}
-            origin_fmt = origin_geo.get("formatted_address", origin_address)
-            dest_fmt = dest_geo.get("formatted_address", destination_address)
+            
+            # 確保使用正確的中文地址
+            origin_fmt = origin_geo.get("formatted_address") if origin_geo else None
+            if not origin_fmt:
+                origin_fmt = origin_address
+            dest_fmt = dest_geo.get("formatted_address") if dest_geo else None
+            if not dest_fmt:
+                dest_fmt = destination_address
+            
+            logger.debug(f"簡單地圖標註 - 起點地址: {origin_fmt[:50] if origin_fmt else 'None'}...")
+            logger.debug(f"簡單地圖標註 - 終點地址: {dest_fmt[:50] if dest_fmt else 'None'}...")
 
             # 取得座標（如果有的話）
             origin_lat = origin_geo.get("lat") if origin_geo else None
