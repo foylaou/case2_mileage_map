@@ -243,169 +243,185 @@ class GoogleMapsService:
     # =========================
     # NEW: map annotation (km + A/B formatted address + generated time)
     # =========================
-    def _annotate_map_info(self, image_path: str, km, origin_addr: str, dest_addr: str):
+    def _load_cjk_font(self, size: int) -> ImageFont.ImageFont:
         """
-        產生「報表型」地圖（推薦）：
-        - 原地圖不被遮擋
-        - 底部新增白色資訊欄：A/B 地址 + 系統產出時間
-        - 左上角顯示 km badge
+        載入 CJK（中日韓）字型，固定從 backend/assets/fonts/ 讀取
+        
+        Args:
+            size: 字型大小
+            
+        Returns:
+            ImageFont.ImageFont: 載入的字型物件
+            
+        Raises:
+            FileNotFoundError: 如果字型檔案不存在
+            OSError: 如果無法載入字型檔案
+        """
+        # 固定從 backend/assets/fonts/ 讀取字型檔
+        assets_fonts_dir = Path(__file__).parent.parent / "assets" / "fonts"
+        
+        # 嘗試載入的字型檔名稱（按優先順序）
+        font_names = [
+            "NotoSansCJKtc-Regular.otf",  # 繁體中文（推薦）
+            "NotoSansCJK-Regular.ttc",     # CJK 通用
+            "NotoSansCJKsc-Regular.otf",   # 簡體中文
+            "NotoSansCJKjp-Regular.otf",   # 日文
+        ]
+        
+        for font_name in font_names:
+            font_path = assets_fonts_dir / font_name
+            if font_path.exists():
+                try:
+                    font = ImageFont.truetype(str(font_path), size)
+                    logger.info(f"✓ 成功載入專案字型: {font_path} (大小: {size})")
+                    return font
+                except Exception as e:
+                    logger.warning(f"✗ 無法載入字型 {font_path}: {str(e)}")
+                    continue
+        
+        # 如果所有字型都無法載入，拋出錯誤
+        error_msg = (
+            f"無法載入任何 CJK 字型檔案。請確認字型檔案存在於 {assets_fonts_dir}\n"
+            f"支援的字型檔名稱: {', '.join(font_names)}\n"
+            f"請參考 {assets_fonts_dir / 'README.md'} 取得字型檔案"
+        )
+        logger.error(f"⚠ {error_msg}")
+        raise FileNotFoundError(error_msg)
+
+    def annotate_map_info(self, image_path: str, distance_km, origin_addr: str, dest_addr: str, round_trip_km=None, date_text=None):
+        """
+        產生符合使用者需求的「報表型」地圖：
+        1. 頂部 Header：日期 + 起點 + 終點 + 往返核銷里程
+        2. 地圖左上角 Badge：單程公里數 (紅字白底)
         """
         try:
-            # 確保地址是字串且正確處理
-            origin_addr = str(origin_addr) if origin_addr else ""
-            dest_addr = str(dest_addr) if dest_addr else ""
+            # 確保內容是字串
+            origin_addr = str(origin_addr).replace("台灣", "") if origin_addr else "" # 移除重複的台灣若有
+            # 簡單優化地址顯示
+            if origin_addr.startswith("號"): origin_addr = origin_addr[1:]
             
+            dest_addr = str(dest_addr).replace("台灣", "") if dest_addr else ""
+            
+            # 日期處理
+            date_str = ""
+            if date_text:
+                try:
+                    # 嘗試解析日期字串，格式化為 MM/DD
+                    # 假設輸入可能是 YYYY-MM-DD 或 YYYY/MM/DD
+                    dt = None
+                    for fmt in ["%Y-%m-%d", "%Y/%m/%d", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S"]:
+                        try:
+                            dt = datetime.strptime(str(date_text).split(' ')[0], fmt)
+                            break
+                        except ValueError:
+                            continue
+                    if dt:
+                        date_str = dt.strftime("%m/%d")
+                    else:
+                        date_str = str(date_text)
+                except:
+                    date_str = str(date_text)
+            
+            # 若無日期，使用當日
+            if not date_str:
+                date_str = datetime.now().strftime("%m/%d")
+
             base = Image.open(image_path).convert("RGB")
             W, H = base.size
 
-            footer_h = 170  # 底部資訊欄高度（可調：150~220）
+            # 計算縮放比例（以 1000px 為基準）
+            scale = max(W / 1000.0, 0.8)
+            
+            # --- 樣式設定 ---
+            # 1. Header 區域
+            header_font_size = int(32 * scale)  # 標題字大一點
+            padding_base = int(20 * scale)
+            header_padding_y = int(35 * scale)
+            
+            # 準備文字
+            # 格式：10/22 高雄市...至 高雄市...往返,核銷 19.1 公里。
+            rt_km = round_trip_km if round_trip_km is not None else (distance_km * 2 if distance_km else 0)
+            header_text = f"{date_str} {origin_addr}至 {dest_addr}往返，核銷 {rt_km} 公里。"
+            
+            # 載入字型
+            try:
+                font_header = self._load_cjk_font(header_font_size)
+                # Badge 字型 (大, 紅色)
+                font_badge_num = self._load_cjk_font(int(48 * scale))
+                font_badge_unit = self._load_cjk_font(int(32 * scale))
+            except FileNotFoundError:
+                logger.warning("無法載入 CJK 字型，使用預設字型")
+                font_header = ImageFont.load_default()
+                font_badge_num = ImageFont.load_default()
+                font_badge_unit = ImageFont.load_default()
 
-            canvas = Image.new("RGB", (W, H + footer_h), (255, 255, 255))
-            canvas.paste(base, (0, 0))
-
+            # 計算 Header 高度
+            temp_draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+            bbox = temp_draw.textbbox((0, 0), header_text, font=font_header)
+            text_w = bbox[2] - bbox[0]
+            text_h = bbox[3] - bbox[1]
+            
+            # 給予足夠的 Header 高度
+            header_h = int(text_h + (header_padding_y * 1.5))
+            
+            # 建立新畫布
+            canvas = Image.new("RGB", (W, H + header_h), (255, 255, 255))
+            
+            # 繪製 Header 文字
             draw = ImageDraw.Draw(canvas)
-
-            def load_font(size: int):
-                """載入字體：優先使用專案字體，失敗則嘗試系統中文字體"""
-                # 1. 優先：從專案路徑載入字體：backend/fonts/NotoSansCJK-Regular.ttc
-                font_path = Path(__file__).parent.parent / "fonts" / "NotoSansCJK-Regular.ttc"
+            # 靠左，留點邊距
+            draw.text((padding_base, header_padding_y // 2), header_text, fill=(0, 0, 0), font=font_header)
+            
+            # 貼上地圖 (在 Header 下方)
+            canvas.paste(base, (0, header_h))
+            
+            # --- Badge 設定 (單程公里數) ---
+            # 位置：地圖左上角 (Header下方 + padding)
+            if distance_km is not None:
+                badge_text_num = f"{distance_km}"
+                badge_text_unit = "km"
                 
-                if font_path.exists():
-                    try:
-                        font = ImageFont.truetype(str(font_path), size)
-                        logger.debug(f"成功載入專案字體: {font_path}")
-                        return font
-                    except Exception as e:
-                        logger.warning(f"無法載入專案字體 {font_path}: {str(e)}")
+                # 計算 Badge 大小
+                bbox_num = draw.textbbox((0, 0), badge_text_num, font=font_badge_num)
+                bbox_unit = draw.textbbox((0, 0), badge_text_unit, font=font_badge_unit)
                 
-                # 2. 回退：嘗試載入系統中文字體
-                system_fonts = []
+                # Badge 內容寬度
+                num_w = bbox_num[2] - bbox_num[0]
+                unit_w = bbox_unit[2] - bbox_unit[0]
+                total_text_w = num_w + int(10 * scale) + unit_w
+                total_text_h = max(bbox_num[3]-bbox_num[1], bbox_unit[3]-bbox_unit[1])
                 
-                # Windows 系統字體
-                if os.name == "nt":
-                    windows_font_dir = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts"
-                    system_fonts.extend([
-                        windows_font_dir / "msjh.ttc",  # 微軟正黑體
-                        windows_font_dir / "msjhbd.ttc",  # 微軟正黑體 Bold
-                        windows_font_dir / "simsun.ttc",  # 新細明體
-                        windows_font_dir / "mingliu.ttc",  # 細明體
-                    ])
-                # Linux 系統字體
-                else:
-                    system_fonts.extend([
-                        Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
-                        Path("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
-                        Path("/usr/share/fonts/truetype/arphic/uming.ttc"),
-                        Path("/usr/share/fonts/truetype/arphic/ukai.ttc"),
-                        Path("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"),
-                    ])
+                badge_w = total_text_w + int(40 * scale) # 左右 padding
+                badge_h = total_text_h + int(20 * scale) # 上下 padding
                 
-                # 嘗試載入系統字體
-                for sys_font_path in system_fonts:
-                    if sys_font_path.exists():
-                        try:
-                            font = ImageFont.truetype(str(sys_font_path), size)
-                            logger.debug(f"成功載入系統字體: {sys_font_path}")
-                            return font
-                        except Exception as e:
-                            logger.debug(f"無法載入系統字體 {sys_font_path}: {str(e)}")
-                            continue
+                badge_x = padding_base
+                badge_y = header_h + padding_base # 地圖區塊的左上角
                 
-                # 3. 最後回退：使用預設字體（可能不支援中文，但至少不會報錯）
-                logger.warning("無法載入任何中文字體，使用預設字體（可能無法顯示中文）")
-                return ImageFont.load_default()
-
-            font_km = load_font(32)
-            font_text = load_font(26)
-
-            def wrap_text(text: str, max_width_px: int, font: ImageFont.ImageFont) -> list[str]:
-                text = (text or "").strip()
-                if not text:
-                    return [""]
-                lines = []
-                cur = ""
-                for ch in text:
-                    test = cur + ch
-                    bbox = draw.textbbox((0, 0), test, font=font)
-                    if (bbox[2] - bbox[0]) <= max_width_px:
-                        cur = test
-                    else:
-                        if cur:
-                            lines.append(cur)
-                        cur = ch
-                if cur:
-                    lines.append(cur)
-                return lines
-
-            # 1) 左上角 km badge
-            if km is not None:
-                km_text = f"{km} km"
-                x, y = 20, 20
-                pad_x, pad_y = 14, 10
-                bbox = draw.textbbox((x, y), km_text, font=font_km)
+                # 繪製 Badge 背景 (白底)
                 draw.rectangle(
-                    [bbox[0] - pad_x, bbox[1] - pad_y, bbox[2] + pad_x, bbox[3] + pad_y],
+                    [badge_x, badge_y, badge_x + badge_w, badge_y + badge_h],
                     fill=(255, 255, 255),
-                    outline=(220, 220, 220),
-                    width=2,
+                    outline=None
                 )
-                draw.text((x, y), km_text, fill=(220, 0, 0), font=font_km)
+                
+                # 繪製 Badge 文字 (紅字)
+                # 數字
+                curr_x = badge_x + int(20 * scale)
+                # 垂直置中 (概略)
+                num_y = badge_y + (badge_h - (bbox_num[3]-bbox_num[1])) // 2 - int(4*scale)
+                draw.text((curr_x, num_y), badge_text_num, fill=(255, 0, 0), font=font_badge_num)
+                
+                # 單位
+                curr_x += num_w + int(10 * scale)
+                unit_y = badge_y + (badge_h - (bbox_unit[3]-bbox_unit[1])) // 2
+                draw.text((curr_x, unit_y), badge_text_unit, fill=(255, 0, 0), font=font_badge_unit)
 
-            # 2) Footer 區
-            footer_top = H
-            draw.line([(0, footer_top), (W, footer_top)], fill=(220, 220, 220), width=2)
-
-            left_x = 20
-            top_y = footer_top + 20
-
-            right_reserved = 420
-            max_width = W - left_x - 20 - right_reserved
-            if max_width < 300:
-                max_width = W - left_x - 40
-
-            a_label = f"A：{origin_addr}"
-            b_label = f"B：{dest_addr}"
-
-            a_lines = wrap_text(a_label, max_width, font_text)
-            b_lines = wrap_text(b_label, max_width, font_text)
-
-            sample_bbox = draw.textbbox((0, 0), "測", font=font_text)
-            line_h = (sample_bbox[3] - sample_bbox[1]) + 10
-
-            cur_y = top_y
-            for line in a_lines:
-                draw.text((left_x, cur_y), line, fill=(0, 0, 0), font=font_text)
-                cur_y += line_h
-
-            cur_y += 6
-            for line in b_lines:
-                draw.text((left_x, cur_y), line, fill=(0, 0, 0), font=font_text)
-                cur_y += line_h
-
-            gen_time = datetime.now().strftime("%Y/%m/%d %H:%M")
-            time_text = f"系統產出時間：{gen_time}"
-
-            tb = draw.textbbox((0, 0), time_text, font=font_text)
-            tw = tb[2] - tb[0]
-            th = tb[3] - tb[1]
-
-            tx = W - tw - 20
-            ty = footer_top + footer_h - th - 20
-
-            pad_x, pad_y = 12, 8
-            draw.rectangle(
-                [tx - pad_x, ty - pad_y, tx + tw + pad_x, ty + th + pad_y],
-                fill=(255, 255, 255),
-                outline=(220, 220, 220),
-                width=2,
-            )
-            draw.text((tx, ty), time_text, fill=(0, 0, 0), font=font_text)
-
+            # 存檔
             canvas.save(image_path)
-            logger.info("地圖已改為 footer 報表樣式（km + A/B 地址 + 系統產出時間）")
+            logger.info("地圖已套用 Header 樣式（日期/路徑核銷資訊 + 紅色 KM Badge）")
 
         except Exception as e:
-            logger.error(f"在地圖上加註資訊錯誤: {str(e)}")
+            logger.error(f"在地圖上標註 Header 資訊錯誤: {str(e)}")
 
 
     def download_static_map_with_polyline(
@@ -490,7 +506,7 @@ class GoogleMapsService:
                 f.write(response.content)
 
             # 加註：公里數 + A/B 地址（formatted address）+ 系統產出時間
-            self._annotate_map_info(
+            self.annotate_map_info(
                 str(output_path),
                 distance_km,
                 origin_geo.get("formatted_address", origin_address),
@@ -546,7 +562,7 @@ class GoogleMapsService:
             origin_fmt = origin_geo.get("formatted_address", origin_address)
             dest_fmt = dest_geo.get("formatted_address", destination_address)
 
-            self._annotate_map_info(str(output_path), distance_km, origin_fmt, dest_fmt)
+            self.annotate_map_info(str(output_path), distance_km, origin_fmt, dest_fmt)
 
             logger.info(f"成功下載簡單靜態地圖: {str(output_path)}")
             return str(output_path)
