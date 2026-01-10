@@ -279,11 +279,31 @@ class GoogleMapsService:
                     logger.warning(f"✗ 無法載入字型 {font_path}: {str(e)}")
                     continue
         
+        # 如果專案內字型都無法載入，嘗試使用系統字型 (Windows)
+        if os.name == "nt":
+            windows_font_dir = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts"
+            system_fonts = [
+                "msjh.ttc",     # 微軟正黑體
+                "msjhbd.ttc",   # 微軟正黑體 粗體
+                "simsun.ttc",   # 新細明體
+                "mingliu.ttc",  # 細明體
+                "arial.ttf",    # Arial (英文 fallback)
+            ]
+            
+            for font_name in system_fonts:
+                font_path = windows_font_dir / font_name
+                if font_path.exists():
+                    try:
+                        font = ImageFont.truetype(str(font_path), size)
+                        logger.info(f"✓ 使用系統字型: {font_path} (大小: {size})")
+                        return font
+                    except Exception as e:
+                        continue
+
         # 如果所有字型都無法載入，拋出錯誤
         error_msg = (
             f"無法載入任何 CJK 字型檔案。請確認字型檔案存在於 {assets_fonts_dir}\n"
-            f"支援的字型檔名稱: {', '.join(font_names)}\n"
-            f"請參考 {assets_fonts_dir / 'README.md'} 取得字型檔案"
+            f"或是 Windows 系統字型 (msjh.ttc)"
         )
         logger.error(f"⚠ {error_msg}")
         raise FileNotFoundError(error_msg)
