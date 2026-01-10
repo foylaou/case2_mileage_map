@@ -315,6 +315,24 @@ def calculate_batch():
                     if not exists or not screenshot_path:
                         logger.warning("[FALLBACK_STATICMAP] Playwright 截圖失敗，回退使用靜態地圖")
                         screenshot_path = None
+                    else:
+                        # 成功截圖後，統一加上 footer 樣式 (km + A/B 地址 + 時間)
+                        try:
+                            # 嘗試獲取 formatted address，如果沒有就用目前的 address
+                            # Playwright 截圖時通常已經經過解析，這裡是再次確認
+                            logger.info(f"[ANNOTATE] 為截圖加上標註資訊: {screenshot_path}")
+                            maps_service.annotate_map_info(
+                                str(screenshot_path),
+                                distance_km=distance_km,
+                                origin_addr=origin_address,
+                                dest_addr=destination_address,
+                                round_trip_km=route_detail.get("round_trip_km"),
+                                date_text=record.get("出差日期時間（開始）")
+                            )
+                        except Exception as ann_e:
+                            logger.error(f"[ANNOTATE] 標註截圖失敗: {str(ann_e)}")
+                            # 標註失敗不影響截圖結果，繼續使用原圖
+
 
                 except Exception as e:
                     logger.warning(f"[FALLBACK_STATICMAP] Playwright 截圖過程發生錯誤: {str(e)}，回退使用靜態地圖")
