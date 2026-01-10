@@ -257,70 +257,44 @@ class GoogleMapsService:
             FileNotFoundError: 如果字型檔案不存在
             OSError: 如果無法載入字型檔案
         """
-        # 固定從 backend/assets/fonts/ 讀取字型檔
-        assets_fonts_dir = Path(__file__).parent.parent / "assets" / "fonts"
+        # 優先尋找專案目錄下的 msjh.ttc (微軟正黑體)
+        # 本地開發時已複製過去，部署時也會包含
+        bundled_font = assets_fonts_dir / "msjh.ttc"
         
-        # 嘗試載入的字型檔名稱（按優先順序）
-        font_names = [
-            "NotoSansCJKtc-Regular.otf",  # 繁體中文（推薦）
-            "NotoSansCJK-Regular.ttc",     # CJK 通用
-            "NotoSansCJKsc-Regular.otf",   # 簡體中文
-            "NotoSansCJKjp-Regular.otf",   # 日文
+        # 備用清單 (若 bundled 不存在，回退 NotoSans 或系統字)
+        font_candidates = [
+            bundled_font,
+            assets_fonts_dir / "NotoSansCJKtc-Regular.otf",
         ]
-        
-        for font_name in font_names:
-            font_path = assets_fonts_dir / font_name
+
+        for font_path in font_candidates:
             if font_path.exists():
                 try:
-                    font = ImageFont.truetype(str(font_path), size)
+                    # TTC 需 index=0
+                    if font_path.suffix.lower() == '.ttc':
+                        font = ImageFont.truetype(str(font_path), size, index=0)
+                    else:
+                        font = ImageFont.truetype(str(font_path), size)
                     logger.info(f"✓ 成功載入專案字型: {font_path} (大小: {size})")
                     return font
                 except Exception as e:
-                    logger.warning(f"✗ 無法載入字型 {font_path}: {str(e)}")
+                    logger.warning(f"  嘗試載入專案字型失敗: {font_path}, 錯誤: {e}")
                     continue
-        
-        # 如果專案內字型都無法載入，嘗試使用系統字型 (Windows)
-        if os.name == "nt":
-            # 定義可能的字型目錄
-            font_dirs = [
-                Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts",
-                Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "Windows" / "Fonts",
-            ]
-            
-            # 定義可能的字型名稱 (優先順序)
-            system_fonts = [
-                "msjh.ttc",      # 微軟正黑體 (Microsoft JhengHei)
-                "msjhbd.ttc",    # 微軟正黑體 粗體
-                "simsun.ttc",    # 新細明體
-                "mingliu.ttc",   # 細明體
-                "kaiu.ttf",      # 標楷體
-                "DFKai-SB.ttf",  # 標楷體
-            ]
-            
-            for font_dir in font_dirs:
-                if not font_dir.exists():
-                    continue
-                    
-                for font_name in system_fonts:
-                    font_path = font_dir / font_name
-                    if font_path.exists():
-                        try:
-                            # 嘗試載入
-                            # 注意: TTC 檔案可能需要指定 index=0
-                            if font_path.suffix.lower() == '.ttc':
-                                font = ImageFont.truetype(str(font_path), size, index=0)
-                            else:
-                                font = ImageFont.truetype(str(font_path), size)
-                            logger.info(f"✓ 成功載入系統字型: {font_path} (大小: {size})")
-                            return font
-                        except Exception as e:
-                            logger.warning(f"  嘗試載入系統字型失敗: {font_path}, 錯誤: {e}")
-                            continue
 
-        # 如果所有字型都無法載入，拋出錯誤
+        # 最後一道防線：如果專案字型真的沒了，為了不 crash，還是試試看絕對路徑 (雖然使用者說不要依賴)
+        fallback_path = "C:/Windows/Fonts/msjh.ttc"
+        if os.path.exists(fallback_path):
+             try:
+                 font = ImageFont.truetype(fallback_path, size, index=0)
+                 logger.warning(f"⚠ 專案字型遺失，回退使用系統字型: {fallback_path}")
+                 return font
+             except:
+                 pass
+
+        # 如果都失敗
         error_msg = (
-            f"無法載入任何 CJK 字型檔案。請確認字型檔案存在於 {assets_fonts_dir}\n"
-            f"或是 Windows 系統字型 (如: C:/Windows/Fonts/msjh.ttc)"
+            f"無法載入 CJK 字型檔案\n"
+            f"請確保 {bundled_font} 存在"
         )
         logger.error(f"⚠ {error_msg}")
         raise FileNotFoundError(error_msg)
@@ -369,171 +343,125 @@ class GoogleMapsService:
             # 計算縮放比例（以 1000px 為基準）
             scale = max(W / 1000.0, 0.8)
             
-            # --- 樣式設定 ---
-            # Header 區域設計 (三行顯示)
-            # Line 1: 日期 + 往返里程
-            # Line 2: (A) 起點
-            # Line 3: (B) 終點
+            # 刪除舊的 Header 邏輯，改用 Overlay
+            # 建立可繪圖物件 (直接在地圖圖層上畫)
+            draw = ImageDraw.Draw(base, "RGBA") # 確保支援 alpha
             
-            line_height = int(50 * scale)
-            header_font_size = int(36 * scale)  # 字體大一點
-            padding_base = int(20 * scale)
-            header_padding_top = int(20 * scale)
-            header_padding_bottom = int(20 * scale)
-            
-            # 準備文字
-            rt_km = round_trip_km if round_trip_km is not None else (distance_km * 2 if distance_km else 0)
-            
-            text_line1 = f"{date_str}  往返核銷: {rt_km} 公里"
-            text_line2 = f"A (起點): {origin_addr}"
-            text_line3 = f"B (終點): {dest_addr}"
-            
-            # 載入字型
-            try:
-                font_header = self._load_cjk_font(header_font_size)
-                # Badge 字型
-                font_badge_num = self._load_cjk_font(int(48 * scale))
-                font_badge_unit = self._load_cjk_font(int(32 * scale))
-            except FileNotFoundError:
-                logger.warning("無法載入 CJK 字型，使用預設字型")
-                font_header = ImageFont.load_default()
-                font_badge_num = ImageFont.load_default()
-                font_badge_unit = ImageFont.load_default()
+            import textwrap
 
-            # 計算 Header 高度 (3行 + padding)
-            # 使用 textbbox 計算實際高度
-            dummy_draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
-            _, _, _, h1 = dummy_draw.textbbox((0, 0), text_line1, font=font_header)
-            
-            # 估算總高度：3行 * 行高 + 上下 padding
-            # 為避免字重疊，每行高度取 max(h1, line_height)
-            single_line_h = max(h1, line_height)
-            header_h = header_padding_top + (single_line_h * 3) + header_padding_bottom + int(10 * scale)
-            
-            # 建立新畫布
-            canvas = Image.new("RGB", (W, H + header_h), (255, 255, 255))
-            draw = ImageDraw.Draw(canvas)
-            
-            # 繪製 Header 文字
-            # Line 1
-            y1 = header_padding_top
-            draw.text((padding_base, y1), text_line1, fill=(0, 0, 0), font=font_header)
-            
-            # Line 2 (A) - 使用紅色強調 A
-            y2 = y1 + single_line_h
-            draw.text((padding_base, y2), text_line2, fill=(0, 0, 0), font=font_header)
-            
-            # Line 3 (B) - 使用紅色強調 B
-            y3 = y2 + single_line_h
-            draw.text((padding_base, y3), text_line3, fill=(0, 0, 0), font=font_header)
-            
-            # 貼上地圖 (在 Header 下方)
-            map_y = header_h
-            canvas.paste(base, (0, map_y))
-
-            # --- 模擬 Google Maps Web 樣式的地址標籤 (Bubbles) ---
-            # 因為無法精確知道 A/B 座標，我們將標籤固定顯示在地圖區域的上方和下方
-            # 模擬圖 2 的效果
-            
-            # 載入 Bubble 字型 (比 Header 小一點)
-            bubble_font_size = int(24 * scale)
-            try:
-                font_bubble = self._load_cjk_font(bubble_font_size)
-            except:
-                font_bubble = ImageFont.load_default()
-
-            def draw_bubble(text, x, y, bg_color=(255, 255, 255), text_color=(0, 0, 0), anchor="lt"):
-                # 計算文字大小
-                dummy = ImageDraw.Draw(Image.new("RGB", (1, 1)))
-                bbox = dummy.textbbox((0, 0), text, font=font_bubble)
-                w = bbox[2] - bbox[0] + int(20 * scale) # padding
-                h = bbox[3] - bbox[1] + int(10 * scale) # padding
-                
-                # 計算實際繪製位置
-                draw_x = x
-                draw_y = y
-                if "r" in anchor: draw_x -= w
-                if "b" in anchor: draw_y -= h
-                if "c" in anchor: draw_x -= w // 2
-                
-                # 繪製陰影
-                shadow_offset = int(2 * scale)
-                draw.rounded_rectangle(
-                    [draw_x + shadow_offset, draw_y + shadow_offset, draw_x + w + shadow_offset, draw_y + h + shadow_offset],
-                    radius=int(5*scale), fill=(0, 0, 0, 50)
-                )
-                
-                # 繪製背景
-                draw.rounded_rectangle(
-                    [draw_x, draw_y, draw_x + w, draw_y + h],
-                    radius=int(5*scale), fill=bg_color, outline=(200, 200, 200), width=1
-                )
-                
-                # 繪製文字
-                text_x = draw_x + int(10 * scale)
-                text_y = draw_y + int(5 * scale)
-                draw.text((text_x, text_y), text, fill=text_color, font=font_bubble)
-                
-                return h # 回傳高度供參考
-
-            # 繪製起點 Bubble (左上角，紅色字以示區別)
-            # 內容: A: 地址
-            bubble_A_text = f"A: {origin_addr}"
-            draw_bubble(bubble_A_text, padding_base, map_y + padding_base, text_color=(200, 0, 0))
-            
-            # 繪製終點 Bubble (左上角，但在 A 下方)
-            # 內容: B: 地址
-            # 為了避免遮擋路線，我們可以放左下角，或者就放左上角堆疊
-            bubble_B_text = f"B: {dest_addr}"
-            # 這裡簡單起見，堆疊在 A 下方
-            # 先算 A 的高度
-            # 懶得重算，直接往下移一點
-            offset_y = int(40 * scale) + int(10 * scale) # 粗估
-            draw_bubble(bubble_B_text, padding_base, map_y + padding_base + offset_y, text_color=(200, 0, 0))
-
-            # --- Badge 設定 (單程公里數) 保留，但移到右上角避免擋到 Bubble ---
-            # 位置：地圖右上角
+            # -----------------------------------------------
+            # 1. 左上角 Badge (KM)
+            # -----------------------------------------------
             if distance_km is not None:
-                badge_text_num = f"{distance_km}"
-                badge_text_unit = "km"
+                km_text = f"{distance_km} km"
+                font_km = self._load_cjk_font(int(40 * scale))
                 
-                # ... (原有 Badge 計算邏輯，改 x 座標)
-                bbox_num = draw.textbbox((0, 0), badge_text_num, font=font_badge_num)
-                bbox_unit = draw.textbbox((0, 0), badge_text_unit, font=font_badge_unit)
+                dummy = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+                bbox = dummy.textbbox((0, 0), km_text, font=font_km)
+                w = bbox[2] - bbox[0] + int(30 * scale)
+                h = bbox[3] - bbox[1] + int(20 * scale)
                 
-                num_w = bbox_num[2] - bbox_num[0]
-                unit_w = bbox_unit[2] - bbox_unit[0]
-                total_text_w = num_w + int(10 * scale) + unit_w
-                total_text_h = max(bbox_num[3]-bbox_num[1], bbox_unit[3]-bbox_unit[1])
+                x, y = int(20 * scale), int(20 * scale)
                 
-                badge_w = total_text_w + int(40 * scale)
-                badge_h = total_text_h + int(20 * scale)
-                
-                # 改為右上角
-                badge_x = W - badge_w - padding_base
-                badge_y = map_y + padding_base 
-                
-                # 繪製 Badge 背景
-                draw.rectangle(
-                    [badge_x, badge_y, badge_x + badge_w, badge_y + badge_h],
-                    fill=(255, 255, 255),
-                    outline=None
-                )
-                
-                # 繪製 Badge 文字
-                curr_x = badge_x + int(20 * scale)
-                num_y = badge_y + (badge_h - (bbox_num[3]-bbox_num[1])) // 2 - int(4*scale)
-                draw.text((curr_x, num_y), badge_text_num, fill=(255, 0, 0), font=font_badge_num)
-                
-                curr_x += num_w + int(10 * scale)
-                unit_y = badge_y + (badge_h - (bbox_unit[3]-bbox_unit[1])) // 2
-                draw.text((curr_x, unit_y), badge_text_unit, fill=(255, 0, 0), font=font_badge_unit)
+                # 陰影
+                draw.rounded_rectangle([x+2, y+2, x+w+2, y+h+2], radius=10, fill=(0,0,0,100))
+                # 白底
+                draw.rounded_rectangle([x, y, x+w, y+h], radius=10, fill=(255,255,255,230))
+                # 紅字
+                text_x = x + int(15 * scale)
+                text_y = y + int(10 * scale)
+                draw.text((text_x, text_y), km_text, fill=(200, 0, 0), font=font_km)
+
+            # -----------------------------------------------
+            # 2. 左下角 Address Box (A/B) - 半透明白底
+            # -----------------------------------------------
+            font_addr = self._load_cjk_font(int(24 * scale))
+            
+            # 定義文字內容
+            origin_full = f"A (起點): {origin_addr}"
+            dest_full = f"B (終點): {dest_addr}"
+            
+            # 計算最大寬度 (例如圖片寬度的 60%)
+            max_text_width = int(W * 0.6)
+            
+            # 使用 textwrap 換行
+            # 先估算字元數... 不太準，直接用 PIL 計算並手動換行比較複雜
+            # 簡單做法：按字數切，假設全形寬度
+            # 24px font, max 600px width => 25 chars
+            char_limit = int(max_text_width / (24 * scale))
+             
+            origin_wrapped = textwrap.fill(origin_full, width=char_limit)
+            dest_wrapped = textwrap.fill(dest_full, width=char_limit)
+            full_text = origin_wrapped + "\n" + dest_wrapped
+            
+            # 計算包圍盒
+            dummy = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+            bbox = dummy.textmultilinebbox((0, 0), full_text, font=font_addr, spacing=4)
+            text_w = bbox[2] - bbox[0]
+            text_h = bbox[3] - bbox[1]
+            
+            box_w = text_w + int(30 * scale)
+            box_h = text_h + int(30 * scale)
+            
+            # 左下角位置 (padding 20)
+            box_x = int(20 * scale)
+            box_y = H - box_h - int(20 * scale)
+            
+            # 如果跟 Badge 重疊 (雖然 Badge 在左上，Address 在左下，通常不會，除非地圖很矮)
+            # 畫半透明框
+            # PIL Draw.rectangle 不支援 alpha fill on RGB image unless "RGBA" mode
+            # 這裡我們確認 base 已經是 RGB (from line 329)，需要轉 RGBA 才能畫半透明
+             
+            # 畫框
+            overlay = Image.new('RGBA', base.size, (0,0,0,0))
+            draw_ov = ImageDraw.Draw(overlay)
+            draw_ov.rounded_rectangle(
+                [box_x, box_y, box_x + box_w, box_y + box_h],
+                radius=10, 
+                fill=(255, 255, 255, 200) # 半透明白
+            )
+            # 畫線條區隔 A 和 B (可選，這裡省略)
+
+            # 畫文字
+            text_start_x = box_x + int(15 * scale)
+            text_start_y = box_y + int(15 * scale)
+            
+            # 分開畫顏色 (A紅色 B紅色 其他黑色)
+            # 這裡簡單處理：全部黑色，A/B 前綴稍微區別? 無法混色 in one string
+            # 直接畫全黑即可，清楚最重要
+            draw_ov.text((text_start_x, text_start_y), full_text, fill=(0, 0, 0), font=font_addr, spacing=4)
+            
+            # 合併
+            base = base.convert("RGBA")
+            base = Image.alpha_composite(base, overlay)
+            base = base.convert("RGB")
+
+            # -----------------------------------------------
+            # 3. 右下角 Timestamp
+            # -----------------------------------------------
+            # 格式：System Generated: YYYY/MM/DD HH:MM
+            ts_str = f"系統產出時間: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
+            font_ts = self._load_cjk_font(int(20 * scale))
+            
+            bbox_ts = dummy.textbbox((0, 0), ts_str, font=font_ts)
+            ts_w = bbox_ts[2] - bbox_ts[0]
+            ts_h = bbox_ts[3] - bbox_ts[1]
+            
+            ts_x = W - ts_w - int(20 * scale)
+            ts_y = H - ts_h - int(20 * scale)
+            
+            # 加個白色暈開效果 (Halo) 增加可讀性
+            draw = ImageDraw.Draw(base) # RGB mode now
+            halo_r = 2
+            for ox in range(-halo_r, halo_r+1):
+                for oy in range(-halo_r, halo_r+1):
+                    draw.text((ts_x+ox, ts_y+oy), ts_str, font=font_ts, fill=(255,255,255))
+            
+            draw.text((ts_x, ts_y), ts_str, font=font_ts, fill=(50, 50, 50))
 
             # 存檔
-
-            # 存檔
-            canvas.save(image_path)
-            logger.info("地圖已套用 Header 樣式（日期/路徑核銷資訊 + 紅色 KM Badge）")
+            base.save(image_path)
+            logger.info("地圖已套用 Burn-in 樣式（KM + Address Overlay + Timestamp）")
 
         except Exception as e:
             logger.error(f"在地圖上標註 Header 資訊錯誤: {str(e)}")
