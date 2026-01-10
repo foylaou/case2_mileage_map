@@ -427,51 +427,109 @@ class GoogleMapsService:
             y3 = y2 + single_line_h
             draw.text((padding_base, y3), text_line3, fill=(0, 0, 0), font=font_header)
             
-            # 貼上地圖
-            
             # 貼上地圖 (在 Header 下方)
-            canvas.paste(base, (0, header_h))
+            map_y = header_h
+            canvas.paste(base, (0, map_y))
+
+            # --- 模擬 Google Maps Web 樣式的地址標籤 (Bubbles) ---
+            # 因為無法精確知道 A/B 座標，我們將標籤固定顯示在地圖區域的上方和下方
+            # 模擬圖 2 的效果
             
-            # --- Badge 設定 (單程公里數) ---
-            # 位置：地圖左上角 (Header下方 + padding)
+            # 載入 Bubble 字型 (比 Header 小一點)
+            bubble_font_size = int(24 * scale)
+            try:
+                font_bubble = self._load_cjk_font(bubble_font_size)
+            except:
+                font_bubble = ImageFont.load_default()
+
+            def draw_bubble(text, x, y, bg_color=(255, 255, 255), text_color=(0, 0, 0), anchor="lt"):
+                # 計算文字大小
+                dummy = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+                bbox = dummy.textbbox((0, 0), text, font=font_bubble)
+                w = bbox[2] - bbox[0] + int(20 * scale) # padding
+                h = bbox[3] - bbox[1] + int(10 * scale) # padding
+                
+                # 計算實際繪製位置
+                draw_x = x
+                draw_y = y
+                if "r" in anchor: draw_x -= w
+                if "b" in anchor: draw_y -= h
+                if "c" in anchor: draw_x -= w // 2
+                
+                # 繪製陰影
+                shadow_offset = int(2 * scale)
+                draw.rounded_rectangle(
+                    [draw_x + shadow_offset, draw_y + shadow_offset, draw_x + w + shadow_offset, draw_y + h + shadow_offset],
+                    radius=int(5*scale), fill=(0, 0, 0, 50)
+                )
+                
+                # 繪製背景
+                draw.rounded_rectangle(
+                    [draw_x, draw_y, draw_x + w, draw_y + h],
+                    radius=int(5*scale), fill=bg_color, outline=(200, 200, 200), width=1
+                )
+                
+                # 繪製文字
+                text_x = draw_x + int(10 * scale)
+                text_y = draw_y + int(5 * scale)
+                draw.text((text_x, text_y), text, fill=text_color, font=font_bubble)
+                
+                return h # 回傳高度供參考
+
+            # 繪製起點 Bubble (左上角，紅色字以示區別)
+            # 內容: A: 地址
+            bubble_A_text = f"A: {origin_addr}"
+            draw_bubble(bubble_A_text, padding_base, map_y + padding_base, text_color=(200, 0, 0))
+            
+            # 繪製終點 Bubble (左上角，但在 A 下方)
+            # 內容: B: 地址
+            # 為了避免遮擋路線，我們可以放左下角，或者就放左上角堆疊
+            bubble_B_text = f"B: {dest_addr}"
+            # 這裡簡單起見，堆疊在 A 下方
+            # 先算 A 的高度
+            # 懶得重算，直接往下移一點
+            offset_y = int(40 * scale) + int(10 * scale) # 粗估
+            draw_bubble(bubble_B_text, padding_base, map_y + padding_base + offset_y, text_color=(200, 0, 0))
+
+            # --- Badge 設定 (單程公里數) 保留，但移到右上角避免擋到 Bubble ---
+            # 位置：地圖右上角
             if distance_km is not None:
                 badge_text_num = f"{distance_km}"
                 badge_text_unit = "km"
                 
-                # 計算 Badge 大小
+                # ... (原有 Badge 計算邏輯，改 x 座標)
                 bbox_num = draw.textbbox((0, 0), badge_text_num, font=font_badge_num)
                 bbox_unit = draw.textbbox((0, 0), badge_text_unit, font=font_badge_unit)
                 
-                # Badge 內容寬度
                 num_w = bbox_num[2] - bbox_num[0]
                 unit_w = bbox_unit[2] - bbox_unit[0]
                 total_text_w = num_w + int(10 * scale) + unit_w
                 total_text_h = max(bbox_num[3]-bbox_num[1], bbox_unit[3]-bbox_unit[1])
                 
-                badge_w = total_text_w + int(40 * scale) # 左右 padding
-                badge_h = total_text_h + int(20 * scale) # 上下 padding
+                badge_w = total_text_w + int(40 * scale)
+                badge_h = total_text_h + int(20 * scale)
                 
-                badge_x = padding_base
-                badge_y = header_h + padding_base # 地圖區塊的左上角
+                # 改為右上角
+                badge_x = W - badge_w - padding_base
+                badge_y = map_y + padding_base 
                 
-                # 繪製 Badge 背景 (白底)
+                # 繪製 Badge 背景
                 draw.rectangle(
                     [badge_x, badge_y, badge_x + badge_w, badge_y + badge_h],
                     fill=(255, 255, 255),
                     outline=None
                 )
                 
-                # 繪製 Badge 文字 (紅字)
-                # 數字
+                # 繪製 Badge 文字
                 curr_x = badge_x + int(20 * scale)
-                # 垂直置中 (概略)
                 num_y = badge_y + (badge_h - (bbox_num[3]-bbox_num[1])) // 2 - int(4*scale)
                 draw.text((curr_x, num_y), badge_text_num, fill=(255, 0, 0), font=font_badge_num)
                 
-                # 單位
                 curr_x += num_w + int(10 * scale)
                 unit_y = badge_y + (badge_h - (bbox_unit[3]-bbox_unit[1])) // 2
                 draw.text((curr_x, unit_y), badge_text_unit, fill=(255, 0, 0), font=font_badge_unit)
+
+            # 存檔
 
             # 存檔
             canvas.save(image_path)
