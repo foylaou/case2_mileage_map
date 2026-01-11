@@ -13,6 +13,7 @@ from pathlib import Path
 import math
 from PIL import Image, ImageDraw, ImageFont
 import textwrap
+import sys
 
 load_dotenv()
 
@@ -245,55 +246,80 @@ class GoogleMapsService:
     # =========================
     # NEW: map annotation (km + A/B formatted address + generated time)
     # =========================
+    def _resource_path(self, rel: str) -> str:
+        """
+        Get absolute path to resource, works for dev and for PyInstaller
+        """
+        try:
+            # PyInstaller creates a temp folder and stores path in _MEIPASS
+            base_path = sys._MEIPASS
+        except Exception:
+            base_path = os.path.dirname(__file__)
+            # Adjust if we are in backend/services to go up to backend/
+            # specific logic depends on where 'assets' is relative to this file
+            # Current structure: backend/services/google_maps_service.py
+            # Assets: backend/assets
+            base_path = str(Path(__file__).parent.parent)
+
+        return os.path.join(base_path, rel)
+
     def _load_cjk_font(self, size: int):
         from PIL import ImageFont
         import os
 
+        # Candidates (Priority Order)
         candidates = []
 
-        # Windows
+        # 1. Project Bundled Fonts (Robust Path)
+        candidates.append(self._resource_path("assets/fonts/NotoSansTC-Regular.ttf"))
+        candidates.append(self._resource_path("assets/fonts/NotoSansCJKtc-Regular.otf"))
+        candidates.append(self._resource_path("assets/fonts/msjh.ttc"))
+        
+        # 2. Windows System Fonts
         if os.name == "nt":
             win = os.environ.get("WINDIR", "C:/Windows")
             candidates += [
-                os.path.join(win, "Fonts", "msjh.ttc"),   # 微軟正黑體
+                os.path.join(win, "Fonts", "msjh.ttc"),
                 os.path.join(win, "Fonts", "msjhbd.ttc"),
-                os.path.join(win, "Fonts", "simsun.ttc"),
                 os.path.join(win, "Fonts", "kaiu.ttf"),
-                os.path.join(win, "Fonts", "arial.ttf"),
+                os.path.join(win, "Fonts", "simsun.ttc"),
+                os.path.join(win, "Fonts", "arial.ttf"), # Fallback (no CJK)
             ]
-            # Add user local fonts just in case
             local = os.environ.get("LOCALAPPDATA", "")
             if local:
                  candidates.append(os.path.join(local, "Microsoft", "Windows", "Fonts", "msjh.ttc"))
+        
+        # 3. Linux / Render System Fonts
         else:
-            # Render / Ubuntu 常見 Noto CJK 路徑
             candidates += [
                 "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
                 "/usr/share/fonts/opentype/noto/NotoSansCJKtc-Regular.otf",
                 "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-                "/usr/share/fonts/truetype/noto/NotoSansTC-Regular.otf",
                 "/usr/share/fonts/truetype/noto/NotoSansTC-Regular.ttf",
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "/usr/share/fonts/truetype/noto/NotoSansTC-Regular.otf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", # Fallback
             ]
-            
-        # 專案內建字型 (最高優先級)
-        assets_fonts_dir = Path(__file__).parent.parent / "assets" / "fonts"
-        candidates.insert(0, str(assets_fonts_dir / "msjh.ttc"))
-        candidates.insert(1, str(assets_fonts_dir / "NotoSansCJKtc-Regular.otf"))
 
         for fp in candidates:
             if fp and os.path.exists(fp):
                 try:
-                    # 嘗試不同的 index，針對 TTC
+                    font = None
                     if fp.lower().endswith('.ttc'):
                         try:
-                            return ImageFont.truetype(fp, size, index=0)
+                            font = ImageFont.truetype(fp, size, index=0)
                         except:
-                             return ImageFont.truetype(fp, size, index=1)
-                    return ImageFont.truetype(fp, size)
-                except Exception:
+                            font = ImageFont.truetype(fp, size, index=1)
+                    else:
+                        font = ImageFont.truetype(fp, size)
+                    
+                    if font:
+                        logger.info(f"[FONT] Loaded CJK font successfully: {fp}")
+                        return font
+                except Exception as e:
+                    logger.warning(f"[FONT] Failed to load {fp}: {e}")
                     continue
 
+        logger.error("[FONT] No CJK font found in candidates! Using default (may show tofu).")
         return ImageFont.load_default()
 
     def annotate_map_info(self, image_path: str, distance_km, origin_addr: str, dest_addr: str, round_trip_km=None, date_text=None):
@@ -799,7 +825,8 @@ class GoogleMapsService:
             # 預設放右上（避免壓到 marker），如果超出邊界就換位置
             def place_box(px, py, text, prefer="right"):
                 offset = 20 # 避開 marker 半徑
-                max_w = int(W * 0.42)
+                # 調整最大寬度，避免遮擋太多地圖 (0.42 -> 0.32)
+                max_w = int(W * 0.32)
 
                 # 候選位置：右上、右下、左上、左下
                 candidates = []
