@@ -262,52 +262,49 @@ class GoogleMapsService:
             except:
                 return None
 
-        # Assets 字體目錄（專案內字體）
-        assets_fonts_dir = Path(__file__).parent.parent / "assets" / "fonts"
+        # Assets 字體目錄（專案內字體）- 使用 resolve() 確保在 Render 環境可解析
+        assets_fonts_dir = Path(__file__).resolve().parent.parent / "assets" / "fonts"
         
-        candidates = []
+        # 專案內字體（永遠優先，不依賴系統字體）
+        project_fonts = [
+            str(assets_fonts_dir / "NotoSansTC-Regular.ttf"),
+        ]
+        project_fonts = [get_absolute_path(fp) for fp in project_fonts if get_absolute_path(fp)]
         
-        # Windows 系統字體（優先使用）
+        # 系統字體（備選，僅在專案字體不存在時使用）
+        system_candidates = []
+        
         if os.name == "nt":
-            # 取得 Windows 字體目錄
+            # Windows 系統字體
             win = os.environ.get("WINDIR", "C:/Windows")
             fonts_dir = os.path.join(win, "Fonts")
             
-            # Windows 中文字體候選項（按優先順序，使用絕對路徑）
-            # 微軟正黑體（最常用，支援繁體中文）
-            candidates = [
+            # Windows 中文字體候選項
+            system_candidates = [
                 os.path.join(fonts_dir, "msjh.ttc"),      # 微軟正黑體
-                os.path.join(fonts_dir, "msjhbd.ttc"),   # 微軟正黑體粗體
-                os.path.join(fonts_dir, "mingliu.ttc"),  # 新細明體
-                os.path.join(fonts_dir, "kaiu.ttf"),     # 標楷體
-                os.path.join(fonts_dir, "simsun.ttc"),   # 宋體
-                os.path.join(fonts_dir, "simsun.ttf"),   # 宋體
-                os.path.join(fonts_dir, "msyh.ttc"),     # 微軟雅黑
-                os.path.join(fonts_dir, "msyhbd.ttc"),  # 微軟雅黑粗體
+                os.path.join(fonts_dir, "msjhbd.ttc"),     # 微軟正黑體粗體
+                os.path.join(fonts_dir, "mingliu.ttc"),    # 新細明體
+                os.path.join(fonts_dir, "kaiu.ttf"),       # 標楷體
+                os.path.join(fonts_dir, "simsun.ttc"),    # 宋體
+                os.path.join(fonts_dir, "simsun.ttf"),    # 宋體
+                os.path.join(fonts_dir, "msyh.ttc"),       # 微軟雅黑
+                os.path.join(fonts_dir, "msyhbd.ttc"),    # 微軟雅黑粗體
             ]
-            
-            # 轉換為絕對路徑並過濾不存在的路徑
-            candidates = [get_absolute_path(fp) for fp in candidates if get_absolute_path(fp)]
-            
         else:
-            # Linux / 其他系統字體
-            linux_fonts = [
+            # Linux / 其他系統字體（Render 環境通常沒有，但保留作為備選）
+            system_candidates = [
                 "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
                 "/usr/share/fonts/opentype/noto/NotoSansCJKtc-Regular.otf",
                 "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
                 "/usr/share/fonts/truetype/noto/NotoSansTC-Regular.ttf",
                 "/usr/share/fonts/truetype/noto/NotoSansTC-Regular.otf",
             ]
-            candidates = [get_absolute_path(fp) for fp in linux_fonts if get_absolute_path(fp)]
         
-        # 專案內字體（備選）
-        project_fonts = [
-            str(assets_fonts_dir / "NotoSansTC-Regular.ttf"),
-            str(assets_fonts_dir / "NotoSansCJKtc-Regular.otf"),
-            str(assets_fonts_dir / "msjh.ttc"),
-        ]
-        project_fonts = [get_absolute_path(fp) for fp in project_fonts if get_absolute_path(fp)]
-        candidates.extend(project_fonts)
+        # 轉換為絕對路徑並過濾不存在的路徑
+        system_candidates = [get_absolute_path(fp) for fp in system_candidates if get_absolute_path(fp)]
+        
+        # 專案字體永遠優先於系統字體
+        candidates = project_fonts + system_candidates
 
         # 移除 None 值
         candidates = [fp for fp in candidates if fp is not None]
@@ -355,15 +352,20 @@ class GoogleMapsService:
         if loaded_font:
             return loaded_font
 
-        # 如果所有候選字體都失敗，記錄錯誤
+        # 如果所有候選字體都失敗，記錄錯誤並拋出異常
         logger.error("[FONT] ✗ 無法載入任何中文字體！中文字將無法正確顯示。")
         logger.error(f"[FONT] 已嘗試的候選字體數量: {len(candidates)}")
         if candidates:
             logger.error(f"[FONT] 第一個候選字體: {candidates[0]}")
+        if project_fonts:
+            logger.error(f"[FONT] 專案字體路徑: {project_fonts[0]}")
+            logger.error(f"[FONT] 專案字體檔案是否存在: {os.path.exists(project_fonts[0]) if project_fonts[0] else 'N/A'}")
         
-        # 使用預設字體（不支援中文）
-        logger.warning("[FONT] 使用預設字體（不支援中文，將顯示為方框）")
-        return ImageFont.load_default()
+        # 不使用預設字體（因為不支援中文），改為拋出異常
+        # 讓調用者知道字體載入失敗，避免靜默失敗
+        raise RuntimeError(
+            f"無法載入中文字體！請確認專案字體檔案存在於: {assets_fonts_dir / 'NotoSansTC-Regular.ttf'}"
+        )
 
     def annotate_map_info(self, image_path: str, distance_km, origin_addr: str, dest_addr: str, round_trip_km=None, date_text=None):
         """
@@ -600,12 +602,12 @@ class GoogleMapsService:
                     alt_path = f"color:0x808080|weight:4|enc:{alt_polyline}"
                     url_parts.append(f"path={quote(alt_path)}")
 
-            # 起點：紅色標記，標籤 A
-            origin_marker = f"color:0xFF0000|label:A|{origin_geo['lat']},{origin_geo['lng']}"
+            # 起點：紅色標記（不帶 label，由 _draw_ab_markers() 手動繪製）
+            origin_marker = f"color:0xFF0000|{origin_geo['lat']},{origin_geo['lng']}"
             url_parts.append(f"markers={quote(origin_marker)}")
 
-            # 終點：綠色標記，標籤 B
-            destination_marker = f"color:0x00FF00|label:B|{destination_geo['lat']},{destination_geo['lng']}"
+            # 終點：綠色標記（不帶 label，由 _draw_ab_markers() 手動繪製）
+            destination_marker = f"color:0x00FF00|{destination_geo['lat']},{destination_geo['lng']}"
             url_parts.append(f"markers={quote(destination_marker)}")
 
             url_parts.append(f"key={self.api_key}")
