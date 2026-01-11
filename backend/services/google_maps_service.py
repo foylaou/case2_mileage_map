@@ -735,7 +735,7 @@ class GoogleMapsService:
         except Exception as e:
             logger.error(f"標註 A/B Marker 旁地址錯誤: {e}")
             import traceback
-            logger.error(traceback.format_exc()))
+            logger.error(traceback.format_exc())
 
     # 仍保留：舊版只加 km 的功能（如果其他地方還在用）
     def _add_km_text_to_map(self, image_path, km):
