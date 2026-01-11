@@ -244,53 +244,125 @@ class GoogleMapsService:
         return clean_text.strip()
 
     def _load_cjk_font(self, size: int):
+        """
+        載入支援中文（CJK）的字體
+        參考 matplotlib 的方式，明確指定字體路徑
+        """
         from PIL import ImageFont
         import os
 
-        # Candidates (Priority Order)
-        # Note: We rely on os.path.exists checks. 
-        # Assets path is relative to this file: backend/services/google_maps_service.py -> backend/assets/fonts
+        # 將路徑轉換為絕對路徑，確保路徑正確
+        def get_absolute_path(path):
+            """將路徑轉換為絕對路徑"""
+            if not path:
+                return None
+            try:
+                abs_path = os.path.abspath(str(path))
+                return abs_path if os.path.exists(abs_path) else None
+            except:
+                return None
+
+        # Assets 字體目錄（專案內字體）
         assets_fonts_dir = Path(__file__).parent.parent / "assets" / "fonts"
         
-        candidates = [
-            str(assets_fonts_dir / "NotoSansTC-Regular.ttf"),
-            str(assets_fonts_dir / "NotoSansCJKtc-Regular.otf"),
-            str(assets_fonts_dir / "msjh.ttc"),
-        ]
-
-        # Windows System Fonts fallback
+        candidates = []
+        
+        # Windows 系統字體（優先使用）
         if os.name == "nt":
+            # 取得 Windows 字體目錄
             win = os.environ.get("WINDIR", "C:/Windows")
-            candidates += [
-                os.path.join(win, "Fonts", "msjh.ttc"),
-                os.path.join(win, "Fonts", "kaiu.ttf"),
-                os.path.join(win, "Fonts", "simsun.ttc"),
+            fonts_dir = os.path.join(win, "Fonts")
+            
+            # Windows 中文字體候選項（按優先順序，使用絕對路徑）
+            # 微軟正黑體（最常用，支援繁體中文）
+            candidates = [
+                os.path.join(fonts_dir, "msjh.ttc"),      # 微軟正黑體
+                os.path.join(fonts_dir, "msjhbd.ttc"),   # 微軟正黑體粗體
+                os.path.join(fonts_dir, "mingliu.ttc"),  # 新細明體
+                os.path.join(fonts_dir, "kaiu.ttf"),     # 標楷體
+                os.path.join(fonts_dir, "simsun.ttc"),   # 宋體
+                os.path.join(fonts_dir, "simsun.ttf"),   # 宋體
+                os.path.join(fonts_dir, "msyh.ttc"),     # 微軟雅黑
+                os.path.join(fonts_dir, "msyhbd.ttc"),  # 微軟雅黑粗體
             ]
+            
+            # 轉換為絕對路徑並過濾不存在的路徑
+            candidates = [get_absolute_path(fp) for fp in candidates if get_absolute_path(fp)]
+            
         else:
-            # Linux / Render System Fonts
-            candidates += [
+            # Linux / 其他系統字體
+            linux_fonts = [
                 "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
                 "/usr/share/fonts/opentype/noto/NotoSansCJKtc-Regular.otf",
                 "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
                 "/usr/share/fonts/truetype/noto/NotoSansTC-Regular.ttf",
                 "/usr/share/fonts/truetype/noto/NotoSansTC-Regular.otf",
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 
             ]
+            candidates = [get_absolute_path(fp) for fp in linux_fonts if get_absolute_path(fp)]
+        
+        # 專案內字體（備選）
+        project_fonts = [
+            str(assets_fonts_dir / "NotoSansTC-Regular.ttf"),
+            str(assets_fonts_dir / "NotoSansCJKtc-Regular.otf"),
+            str(assets_fonts_dir / "msjh.ttc"),
+        ]
+        project_fonts = [get_absolute_path(fp) for fp in project_fonts if get_absolute_path(fp)]
+        candidates.extend(project_fonts)
 
+        # 移除 None 值
+        candidates = [fp for fp in candidates if fp is not None]
+
+        # 嘗試載入字體（使用絕對路徑）
+        loaded_font = None
         for fp in candidates:
-            if fp and os.path.exists(fp):
-                try:
-                    logger.info(f"[FONT] Found candidate: {fp}")
-                    if fp.lower().endswith('.ttc'):
+            try:
+                logger.info(f"[FONT] 嘗試載入字體: {fp}")
+                
+                if fp.lower().endswith('.ttc'):
+                    # TTC 檔案可能包含多個字體，嘗試不同索引
+                    for idx in [0, 1, 2]:
                         try:
-                            return ImageFont.truetype(fp, size, index=0)
-                        except:
-                            return ImageFont.truetype(fp, size, index=1)
-                    return ImageFont.truetype(fp, size)
-                except Exception as e:
-                    logger.warning(f"[FONT] Failed to load {fp}: {e}")
+                            # 使用絕對路徑明確指定字體
+                            loaded_font = ImageFont.truetype(fp, size, index=idx)
+                            # 測試字體是否能正確顯示中文
+                            test_draw = ImageDraw.Draw(Image.new("RGB", (100, 100)))
+                            test_bbox = test_draw.textbbox((0, 0), "測試", font=loaded_font)
+                            if test_bbox[2] > test_bbox[0]:  # 確保文字寬度 > 0
+                                logger.info(f"[FONT] ✓ 成功載入字體: {fp} (index={idx}, size={size})")
+                                break
+                        except Exception as e:
+                            if idx == 2:  # 最後一個索引也失敗
+                                logger.debug(f"[FONT] 無法載入 TTC 字體 {fp} (index={idx}): {e}")
+                            continue
+                    if loaded_font:
+                        break
+                else:
+                    # TTF/OTF 檔案
+                    loaded_font = ImageFont.truetype(fp, size)
+                    # 測試字體是否能正確顯示中文
+                    test_draw = ImageDraw.Draw(Image.new("RGB", (100, 100)))
+                    test_bbox = test_draw.textbbox((0, 0), "測試", font=loaded_font)
+                    if test_bbox[2] > test_bbox[0]:  # 確保文字寬度 > 0
+                        logger.info(f"[FONT] ✓ 成功載入字體: {fp} (size={size})")
+                        break
+                    else:
+                        loaded_font = None
+                        
+            except Exception as e:
+                logger.debug(f"[FONT] 載入字體失敗 {fp}: {e}")
+                continue
 
-        logger.warning("CJK font not found, fallback to default (Chinese will break)")
+        if loaded_font:
+            return loaded_font
+
+        # 如果所有候選字體都失敗，記錄錯誤
+        logger.error("[FONT] ✗ 無法載入任何中文字體！中文字將無法正確顯示。")
+        logger.error(f"[FONT] 已嘗試的候選字體數量: {len(candidates)}")
+        if candidates:
+            logger.error(f"[FONT] 第一個候選字體: {candidates[0]}")
+        
+        # 使用預設字體（不支援中文）
+        logger.warning("[FONT] 使用預設字體（不支援中文，將顯示為方框）")
         return ImageFont.load_default()
 
     def annotate_map_info(self, image_path: str, distance_km, origin_addr: str, dest_addr: str, round_trip_km=None, date_text=None):
