@@ -636,6 +636,110 @@ class GoogleMapsService:
             logger.error(f"下載簡單靜態地圖錯誤: {str(e)}")
             return None
        
+    # =========================
+    # Helpers for marker pixel + zoom + label box
+    # (fix: ensure _annotate_ab_near_markers always works)
+    # =========================
+    def _latlng_to_pixel(self, lat, lng, zoom, W, H, center_lat, center_lng):
+        """
+        Web Mercator: lat/lng -> image pixel (x,y) with given zoom and center.
+        """
+        # clamp latitude to mercator valid range
+        lat = max(min(float(lat), 85.05112878), -85.05112878)
+        lng = float(lng)
+
+        def project(lat_deg, lng_deg):
+            siny = math.sin(math.radians(lat_deg))
+            siny = min(max(siny, -0.9999), 0.9999)
+            x = 256.0 * (0.5 + lng_deg / 360.0)
+            y = 256.0 * (0.5 - math.log((1 + siny) / (1 - siny)) / (4 * math.pi))
+            scale = 2 ** int(zoom)
+            return x * scale, y * scale
+
+        cx, cy = project(center_lat, center_lng)
+        px, py = project(lat, lng)
+
+        # put center at canvas center
+        x = (px - cx) + (W / 2.0)
+        y = (py - cy) + (H / 2.0)
+        return x, y
+
+    def _choose_zoom_for_two_points(self, lat1, lng1, lat2, lng2, W, H, padding_px=120):
+        """
+        Choose a zoom that fits both points in the image (with padding).
+        Return: (zoom, center_lat, center_lng)
+        """
+        lat1, lng1 = float(lat1), float(lng1)
+        lat2, lng2 = float(lat2), float(lng2)
+
+        center_lat = (lat1 + lat2) / 2.0
+        center_lng = (lng1 + lng2) / 2.0
+
+        best_zoom = 15
+        for z in range(21, -1, -1):
+            x1, y1 = self._latlng_to_pixel(lat1, lng1, z, W, H, center_lat, center_lng)
+            x2, y2 = self._latlng_to_pixel(lat2, lng2, z, W, H, center_lat, center_lng)
+
+            minx, maxx = min(x1, x2), max(x1, x2)
+            miny, maxy = min(y1, y2), max(y1, y2)
+
+            if (
+                minx >= padding_px and maxx <= (W - padding_px)
+                and miny >= padding_px and maxy <= (H - padding_px)
+            ):
+                best_zoom = z
+                break
+
+        return best_zoom, center_lat, center_lng
+
+    def _draw_label_box(self, draw, text, x, y, font, max_width=480, padding=10, line_spacing=4):
+        """
+        Draw a rounded white label box with auto-wrapping by pixel width.
+        Return bbox: (l,t,r,b)
+        """
+        # pixel-based wrap (CJK safe)
+        lines = []
+        cur = ""
+        for ch in str(text):
+            test = cur + ch
+            bb = draw.textbbox((0, 0), test, font=font)
+            if (bb[2] - bb[0]) <= max_width:
+                cur = test
+            else:
+                if cur:
+                    lines.append(cur)
+                cur = ch
+        if cur:
+            lines.append(cur)
+
+        # measure line height
+        dummy = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+        line_h = (dummy.textbbox((0, 0), "測", font=font)[3]) + line_spacing
+
+        # measure max line width
+        max_line_w = 0
+        for ln in lines:
+            bb = dummy.textbbox((0, 0), ln, font=font)
+            max_line_w = max(max_line_w, bb[2] - bb[0])
+
+        text_h = line_h * len(lines) - line_spacing
+        box_w = max_line_w + padding * 2
+        box_h = text_h + padding * 2
+
+        l, t, r, b = int(x), int(y), int(x + box_w), int(y + box_h)
+
+        # shadow
+        draw.rounded_rectangle([l + 2, t + 2, r + 2, b + 2], radius=10, fill=(0, 0, 0, 80))
+        # white box
+        draw.rounded_rectangle([l, t, r, b], radius=10, fill=(255, 255, 255, 220))
+
+        ty = t + padding
+        for ln in lines:
+            draw.text((l + padding, ty), ln, font=font, fill=(0, 0, 0, 255))
+            ty += line_h
+
+        return (l, t, r, b)
+
     def _draw_ab_markers(self, draw, ax, ay, bx, by):
         """
         手動繪製 A/B 點 Marker (確保一定看得到)
@@ -676,6 +780,14 @@ class GoogleMapsService:
             # 轉成像素座標
             ax, ay = self._latlng_to_pixel(a_lat, a_lng, zoom, W, H, center_lat, center_lng)
             bx, by = self._latlng_to_pixel(b_lat, b_lng, zoom, W, H, center_lat, center_lng)
+
+            # clamp 到畫面內（至少留 20px 邊界）
+            ax = int(min(max(ax, 20), W - 20))
+            ay = int(min(max(ay, 20), H - 20))
+            bx = int(min(max(bx, 20), W - 20))
+            by = int(min(max(by, 20), H - 20))
+
+            logger.info(f"[AB PIXEL] A=({ax},{ay}) B=({bx},{by}) zoom={zoom} center=({center_lat},{center_lng}) size=({W},{H})")
 
             # 1. 先畫 A/B 圓點（不靠 Google markers）
             self._draw_ab_markers(draw, ax, ay, bx, by)
