@@ -247,11 +247,15 @@ class GoogleMapsService:
         from PIL import ImageFont
         import os
 
-        # Candidates (Priority: Bundled -> System)
+        # Candidates (Priority Order)
+        # Note: We rely on os.path.exists checks. 
+        # Assets path is relative to this file: backend/services/google_maps_service.py -> backend/assets/fonts
+        assets_fonts_dir = Path(__file__).parent.parent / "assets" / "fonts"
+        
         candidates = [
-            self._resource_path("assets/fonts/NotoSansTC-Regular.ttf"),
-            self._resource_path("assets/fonts/NotoSansCJKtc-Regular.otf"),
-            self._resource_path("assets/fonts/msjh.ttc"),
+            str(assets_fonts_dir / "NotoSansTC-Regular.ttf"),
+            str(assets_fonts_dir / "NotoSansCJKtc-Regular.otf"),
+            str(assets_fonts_dir / "msjh.ttc"),
         ]
 
         # Windows System Fonts fallback
@@ -260,12 +264,23 @@ class GoogleMapsService:
             candidates += [
                 os.path.join(win, "Fonts", "msjh.ttc"),
                 os.path.join(win, "Fonts", "kaiu.ttf"),
+                os.path.join(win, "Fonts", "simsun.ttc"),
+            ]
+        else:
+            # Linux / Render System Fonts
+            candidates += [
+                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/opentype/noto/NotoSansCJKtc-Regular.otf",
+                "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/truetype/noto/NotoSansTC-Regular.ttf",
+                "/usr/share/fonts/truetype/noto/NotoSansTC-Regular.otf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 
             ]
 
         for fp in candidates:
             if fp and os.path.exists(fp):
                 try:
-                    logger.info(f"[FONT] Using: {fp}")
+                    logger.info(f"[FONT] Found candidate: {fp}")
                     if fp.lower().endswith('.ttc'):
                         try:
                             return ImageFont.truetype(fp, size, index=0)
@@ -273,9 +288,9 @@ class GoogleMapsService:
                             return ImageFont.truetype(fp, size, index=1)
                     return ImageFont.truetype(fp, size)
                 except Exception as e:
-                    logger.warning(f"[FONT] Failed: {fp} err={e}")
+                    logger.warning(f"[FONT] Failed to load {fp}: {e}")
 
-        logger.error("[FONT] No CJK font found, fallback default")
+        logger.warning("CJK font not found, fallback to default (Chinese will break)")
         return ImageFont.load_default()
 
     def annotate_map_info(self, image_path: str, distance_km, origin_addr: str, dest_addr: str, round_trip_km=None, date_text=None):
